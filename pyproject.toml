@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.25", "ruff>=0.8", "pre-commit>=4"]
+dev = ["pytest>=8", "pytest-asyncio>=0.25", "ruff>=0.15.14", "pre-commit>=4"]
 
 [project.scripts]
 cc2-proxy = "src.main:main"
