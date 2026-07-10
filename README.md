@@ -16,7 +16,7 @@ enabling per-spool filament tracking with Home Assistant + Spoolman.
 
 ### Why not just download the file from the printer?
 
-The CC2 stock firmware stores G-code at `/mnt/exUDISK/` internally but exposes no
+The CC2 stock firmware stores G-code at `/opt/usr/gcode` internally but exposes no
 mechanism to retrieve file content over the network.
 
 Flashing [OpenCentauri][opencentauri] firmware is an option that works. This proxy
@@ -184,8 +184,13 @@ a filename.
     "per_slot_mm": [0.0, 0.0, 0.0, 500.5],
     "per_slot_cm3": [0.0, 0.0, 0.0, 1.1],
     "per_slot_grams": [0.0, 0.0, 0.0, 1.1],
+    "per_slot_cost": [0.0, 0.0, 0.0, 0.05],
+    "per_slot_density": [0.0, 0.0, 0.0, 1.24],
+    "per_slot_diameter": [0.0, 0.0, 0.0, 1.75],
+    "filament_names": ["", "", "", "ElegooPLA-Basic-White"],
     "total_grams": 1.50,
     "total_cost": 0.05,
+    "total_filament_changes": 0,
     "total_layers": 300,
     "estimated_time": "1h 18m 10s"
   }
