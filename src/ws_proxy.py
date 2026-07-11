@@ -86,12 +86,8 @@ class WSProxy:
   def __init__(self, config: Config, storage: GCodeStorage) -> None:
     self._config = config
     self._storage = storage
-    self._printer_ws_url = (
-      f'ws://{config.printer_ip}:{config.ws_port}/websocket'
-    )
-    self._printer_http_url = (
-      f'http://{config.printer_ip}:{config.ws_port}'
-    )
+    self._printer_ws_url = f'ws://{config.printer_ip}:{config.ws_port}/websocket'
+    self._printer_http_url = f'http://{config.printer_ip}:{config.ws_port}'
     self._sessions: dict[str, _CC1UploadSession] = {}
     self._lock = asyncio.Lock()
     self._client: aiohttp.ClientSession | None = None
@@ -179,7 +175,9 @@ class WSProxy:
             logger.debug('WS relay task error: %s', task.exception())
 
     except (aiohttp.ClientError, OSError) as exception:
-      logger.warning('WS: cannot reach printer at %s: %s', self._printer_ws_url, exception)
+      logger.warning(
+        'WS: cannot reach printer at %s: %s', self._printer_ws_url, exception
+      )
     finally:
       if not slicer_ws.closed:
         await slicer_ws.close()
@@ -227,7 +225,12 @@ class WSProxy:
 
     try:
       await self._save_chunk(
-        upload_uuid, offset, total_size, file_md5, file_data, filename,
+        upload_uuid,
+        offset,
+        total_size,
+        file_md5,
+        file_data,
+        filename,
       )
     except Exception:
       logger.exception('Failed to save CC1 upload chunk')
@@ -262,7 +265,8 @@ class WSProxy:
     if is_complete:
       try:
         path, _metadata = await asyncio.to_thread(
-          session.finalize, filename_hint=filename,
+          session.finalize,
+          filename_hint=filename,
         )
         logger.info('CC1 upload complete: %s', path.name)
       except Exception:
@@ -285,7 +289,7 @@ class WSProxy:
       for segment in content_type.split(';'):
         segment = segment.strip()
         if segment.startswith('boundary='):
-          boundary = segment[len('boundary='):]
+          boundary = segment[len('boundary=') :]
           break
 
       if not boundary:
@@ -304,7 +308,7 @@ class WSProxy:
           continue
 
         header_section = part[:header_end].decode('utf-8', errors='ignore')
-        body_section = part[header_end + 4:]
+        body_section = part[header_end + 4 :]
         if body_section.endswith(b'\r\n'):
           body_section = body_section[:-2]
 
@@ -403,4 +407,6 @@ class WSProxy:
           async with session.lock:
             await asyncio.to_thread(session.discard)
           del self._sessions[session_uuid]
-          logger.warning('Discarded stale CC1 upload session (uuid=%s)', session_uuid[:8])
+          logger.warning(
+            'Discarded stale CC1 upload session (uuid=%s)', session_uuid[:8]
+          )

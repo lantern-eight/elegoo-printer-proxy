@@ -23,9 +23,7 @@ def _parse_printer_ip() -> str | None:
 def _parse_printer_type() -> str:
   raw = (os.getenv('PRINTER_TYPE') or 'auto').strip().lower()
   if raw not in ('cc1', 'cc2', 'auto'):
-    raise ValueError(
-      f"PRINTER_TYPE must be 'cc1', 'cc2', or 'auto', got '{raw}'"
-    )
+    raise ValueError(f"PRINTER_TYPE must be 'cc1', 'cc2', or 'auto', got '{raw}'")
   return raw
 
 

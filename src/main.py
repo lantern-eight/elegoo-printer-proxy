@@ -56,6 +56,7 @@ async def _run() -> None:
   printer_type = config.printer_type
   if printer_type == 'auto':
     from .detect import detect_printer_type
+
     printer_type = await detect_printer_type(config.printer_ip)
     logger.info('Auto-detected printer type: %s', printer_type)
 
@@ -114,11 +115,10 @@ async def _run() -> None:
 
   elif printer_type == 'cc1':
     from .ws_proxy import WSProxy
+
     ws_proxy = WSProxy(config, storage)
     await ws_proxy.start()
-    background_tasks.append(
-      asyncio.create_task(ws_proxy.cleanup_stale_sessions())
-    )
+    background_tasks.append(asyncio.create_task(ws_proxy.cleanup_stale_sessions()))
     servers.append(
       await start_tcp_proxy(config.camera_port, config.printer_ip, 8080, 'Camera')
     )

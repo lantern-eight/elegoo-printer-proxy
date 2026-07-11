@@ -54,12 +54,16 @@ async def _probe_udp(
 
 async def detect_printer_type(ip: str, probe_timeout: float = 3.0) -> str:
   '''Probe a printer to determine its type. Returns 'cc1' or 'cc2'.'''
-  response = await _probe_udp(ip, _CC2_DISCOVERY_PORT, _CC2_DISCOVERY_MSG, probe_timeout)
+  response = await _probe_udp(
+    ip, _CC2_DISCOVERY_PORT, _CC2_DISCOVERY_MSG, probe_timeout
+  )
   if response is not None:
     logger.info('CC2 discovery response from %s on port %d', ip, _CC2_DISCOVERY_PORT)
     return 'cc2'
 
-  response = await _probe_udp(ip, _CC1_DISCOVERY_PORT, _CC1_DISCOVERY_MSG, probe_timeout)
+  response = await _probe_udp(
+    ip, _CC1_DISCOVERY_PORT, _CC1_DISCOVERY_MSG, probe_timeout
+  )
   if response is not None:
     logger.info('CC1 discovery response from %s on port %d', ip, _CC1_DISCOVERY_PORT)
     return 'cc1'

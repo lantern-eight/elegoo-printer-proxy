@@ -176,9 +176,7 @@ class TestMultipartParsing:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
 
-    fields = proxy._parse_multipart_bytes(
-      b'plain body', 'application/octet-stream'
-    )
+    fields = proxy._parse_multipart_bytes(b'plain body', 'application/octet-stream')
     assert fields is None
 
   @pytest.mark.asyncio
@@ -187,9 +185,7 @@ class TestMultipartParsing:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
 
-    fields = proxy._parse_multipart_bytes(
-      b'', 'multipart/form-data; boundary=---xyz'
-    )
+    fields = proxy._parse_multipart_bytes(b'', 'multipart/form-data; boundary=---xyz')
     assert fields is None
 
 
