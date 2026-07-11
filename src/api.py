@@ -3,23 +3,34 @@
 Endpoints:
   GET /api/filament?filename=CC2_benchy.gcode  → JSON metadata
   GET /api/filament/latest                     → most recent capture
-  GET /api/health                              → {"status": "ok"}
+  GET /api/health                              → {"status": "ok", ...}
 '''
 
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from aiohttp import web
 
 from .storage import GCodeStorage
 
+if TYPE_CHECKING:
+  from .config import Config
+
 logger = logging.getLogger(__name__)
 
 
 class API:
-  def __init__(self, storage: GCodeStorage) -> None:
+  def __init__(
+    self,
+    storage: GCodeStorage,
+    config: Config | None = None,
+    printer_type: str | None = None,
+  ) -> None:
     self._storage = storage
+    self._config = config
+    self._printer_type = printer_type
 
   def register_routes(self, app: web.Application) -> None:
     '''Add API routes.  Call *before* the catch-all proxy route.'''
@@ -32,7 +43,12 @@ class API:
   # ------------------------------------------------------------------
 
   async def _handle_health(self, _request: web.Request) -> web.Response:
-    return web.json_response({'status': 'ok'})
+    response = {'status': 'ok'}
+    if self._config:
+      response['printer_ip'] = self._config.printer_ip
+    if self._printer_type:
+      response['printer_type'] = self._printer_type
+    return web.json_response(response)
 
   async def _handle_filament(self, request: web.Request) -> web.Response:
     filename = request.query.get('filename')

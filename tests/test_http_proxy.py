@@ -118,10 +118,12 @@ def _make_proxy(
 ) -> HTTPProxy:
   config = Config.__new__(Config)
   object.__setattr__(config, 'printer_ip', '192.168.1.100')
+  object.__setattr__(config, 'printer_type', 'cc2')
   object.__setattr__(config, 'http_port', 80)
   object.__setattr__(config, 'mqtt_port', 1883)
   object.__setattr__(config, 'camera_port', 8080)
   object.__setattr__(config, 'mqtt_ws_port', 9001)
+  object.__setattr__(config, 'ws_port', 3030)
   object.__setattr__(config, 'gcode_dir', str(tmp_path))
   object.__setattr__(config, 'retention_days', 90)
   object.__setattr__(config, 'gcode_timezone', ZoneInfo('UTC'))

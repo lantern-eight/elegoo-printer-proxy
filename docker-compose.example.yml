@@ -1,0 +1,54 @@
+# Copy to docker-compose.yml and edit IPs/network to match your LAN.
+#
+# Each printer gets its own container with a dedicated macvlan IP so the
+# slicer connects to the proxy as if it were the real printer.
+# Update: parent interface, subnet/gateway, and ipv4_address values.
+
+networks:
+  printer-net:
+    driver: macvlan
+    driver_opts:
+      parent: eth0            # host network interface — verify with `ip link`
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+          gateway: 192.168.1.1
+
+services:
+  cc2-proxy:
+    build: .
+    container_name: elegoo-proxy-cc2
+    restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      printer-net:
+        ipv4_address: 192.168.1.100  # unused LAN IP for CC2 proxy
+    volumes:
+      - ./gcode-archive/cc2:/data/gcode
+    env_file:
+      - .env.cc2
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cc1-proxy:
+    build: .
+    container_name: elegoo-proxy-cc1
+    restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      printer-net:
+        ipv4_address: 192.168.1.101  # unused LAN IP for CC1 proxy
+    volumes:
+      - ./gcode-archive/cc1:/data/gcode
+    env_file:
+      - .env.cc1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

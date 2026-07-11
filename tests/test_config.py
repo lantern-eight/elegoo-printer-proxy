@@ -24,6 +24,11 @@ class TestConfigDefaults:
     assert config.mqtt_port == 1883
     assert config.camera_port == 8080
     assert config.mqtt_ws_port == 9001
+    assert config.ws_port == 3030
+
+  def test_default_printer_type(self):
+    config = _load_config()
+    assert config.printer_type == 'auto'
 
   def test_default_retention_and_timeout(self):
     config = _load_config()
@@ -59,10 +64,12 @@ class TestConfigOverrides:
   def test_all_values_from_env(self):
     config = _load_config(
       PRINTER_IP='10.0.0.50',
+      PRINTER_TYPE='cc2',
       HTTP_PORT='8080',
       MQTT_PORT='1884',
       CAMERA_PORT='9090',
       MQTT_WS_PORT='9002',
+      WS_PORT='3031',
       GCODE_DIR='/tmp/gcode',
       RETENTION_DAYS='60',
       UPLOAD_TIMEOUT='120',
@@ -72,10 +79,12 @@ class TestConfigOverrides:
       GCODE_TZ='America/New_York',
     )
     assert config.printer_ip == '10.0.0.50'
+    assert config.printer_type == 'cc2'
     assert config.http_port == 8080
     assert config.mqtt_port == 1884
     assert config.camera_port == 9090
     assert config.mqtt_ws_port == 9002
+    assert config.ws_port == 3031
     assert config.gcode_dir == '/tmp/gcode'
     assert config.retention_days == 60
     assert config.upload_timeout == 120
@@ -110,7 +119,7 @@ class TestConfigValidation:
       _load_config(HTTP_PORT='not_a_number')
 
   @pytest.mark.parametrize(
-    'port_env', ['HTTP_PORT', 'MQTT_PORT', 'CAMERA_PORT', 'MQTT_WS_PORT']
+    'port_env', ['HTTP_PORT', 'MQTT_PORT', 'CAMERA_PORT', 'MQTT_WS_PORT', 'WS_PORT']
   )
   @pytest.mark.parametrize('value', ['0', '65536', '-1'])
   def test_port_out_of_range_raises(self, port_env, value):
@@ -156,6 +165,19 @@ class TestConfigValidation:
   def test_invalid_timezone_raises(self):
     with pytest.raises(ZoneInfoNotFoundError):
       _load_config(GCODE_TZ='Invalid/Zone')
+
+  @pytest.mark.parametrize('value', ['cc1', 'cc2', 'auto'])
+  def test_printer_type_valid_values(self, value):
+    config = _load_config(PRINTER_TYPE=value)
+    assert config.printer_type == value
+
+  def test_printer_type_case_insensitive(self):
+    config = _load_config(PRINTER_TYPE='CC2')
+    assert config.printer_type == 'cc2'
+
+  def test_printer_type_invalid_raises(self):
+    with pytest.raises(ValueError, match='PRINTER_TYPE must be'):
+      _load_config(PRINTER_TYPE='cc3')
 
   def test_frozen_cannot_mutate(self):
     config = _load_config(PRINTER_IP='10.0.0.1')

@@ -20,6 +20,15 @@ def _parse_printer_ip() -> str | None:
   return str(ipaddress.ip_address(raw.strip()))
 
 
+def _parse_printer_type() -> str:
+  raw = (os.getenv('PRINTER_TYPE') or 'auto').strip().lower()
+  if raw not in ('cc1', 'cc2', 'auto'):
+    raise ValueError(
+      f"PRINTER_TYPE must be 'cc1', 'cc2', or 'auto', got '{raw}'"
+    )
+  return raw
+
+
 def _parse_port(env_var: str, default: int) -> int:
   value = int(os.getenv(env_var, str(default)))
   if not 1 <= value <= 65535:
@@ -37,6 +46,7 @@ def _parse_non_negative_int(env_var: str, default: str) -> int:
 @dataclass(frozen=True)
 class Config:
   printer_ip: str | None = field(default_factory=_parse_printer_ip)
+  printer_type: str = field(default_factory=_parse_printer_type)
 
   http_port: int = field(
     default_factory=lambda: _parse_port('HTTP_PORT', 80),
@@ -49,6 +59,9 @@ class Config:
   )
   mqtt_ws_port: int = field(
     default_factory=lambda: _parse_port('MQTT_WS_PORT', 9001),
+  )
+  ws_port: int = field(
+    default_factory=lambda: _parse_port('WS_PORT', 3030),
   )
 
   gcode_dir: str = field(default_factory=lambda: os.getenv('GCODE_DIR', '/data/gcode'))

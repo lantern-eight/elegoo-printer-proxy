@@ -13,15 +13,26 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from src.api import API
+from src.config import Config
 from src.storage import GCodeStorage
 from tests.conftest import make_gcode
 
 _UTC = ZoneInfo('UTC')
 
 
-def _make_app(storage: GCodeStorage) -> web.Application:
+def _make_config(printer_ip='192.168.1.100') -> Config:
+  config = Config.__new__(Config)
+  object.__setattr__(config, 'printer_ip', printer_ip)
+  return config
+
+
+def _make_app(
+  storage: GCodeStorage,
+  config: Config | None = None,
+  printer_type: str | None = None,
+) -> web.Application:
   app = web.Application()
-  api = API(storage)
+  api = API(storage, config=config, printer_type=printer_type)
   api.register_routes(app)
   return app
 
@@ -49,7 +60,27 @@ class TestHealth:
       response = await client.get('/api/health')
       assert response.status == 200
       body = await response.json()
-      assert body == {'status': 'ok'}
+      assert body['status'] == 'ok'
+
+  @pytest.mark.asyncio
+  async def test_includes_printer_info(self, api_storage):
+    config = _make_config(printer_ip='192.168.1.100')
+    app = _make_app(api_storage, config=config, printer_type='cc2')
+    async with TestClient(TestServer(app)) as client:
+      response = await client.get('/api/health')
+      assert response.status == 200
+      body = await response.json()
+      assert body['printer_ip'] == '192.168.1.100'
+      assert body['printer_type'] == 'cc2'
+
+  @pytest.mark.asyncio
+  async def test_backwards_compatible_without_config(self, api_storage):
+    app = _make_app(api_storage)
+    async with TestClient(TestServer(app)) as client:
+      response = await client.get('/api/health')
+      body = await response.json()
+      assert 'printer_ip' not in body
+      assert 'printer_type' not in body
 
 
 # ===================================================================
