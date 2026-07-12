@@ -187,3 +187,4 @@ docker-compose.yml
 .cursorindexingignore
 .DS_Store
 .env.*
+!.env.example

@@ -207,7 +207,8 @@ no files have been captured yet.
 
 **`GET /api/health`**
 
-Returns `{"status": "ok"}`. Useful for checking proxy connectivity.
+Returns `{"status": "ok"}` with optional `printer_ip` and `printer_type` fields
+when configured. Useful for checking proxy connectivity.
 
 ## Elegoo Home Assistant Integration
 

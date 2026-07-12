@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -41,13 +42,14 @@ class _CC1UploadSession:
     md5: str,
     storage: GCodeStorage,
   ) -> None:
+    safe_uuid = re.sub(r'[^a-zA-Z0-9\-]', '', uuid)
     self.uuid = uuid
     self.total_size = total_size
     self.md5 = md5
     self.bytes_written = 0
     self.created = time.monotonic()
     self.lock = asyncio.Lock()
-    self._path = storage.temp_path(f'cc1_{uuid}')
+    self._path = storage.temp_path(f'cc1_{safe_uuid}')
     self._storage = storage
     self._fh = None
 
@@ -175,7 +177,7 @@ class WSProxy:
           ):
             logger.debug('WS relay task error: %s', task.exception())
 
-    except (aiohttp.ClientError, OSError) as exception:
+    except (aiohttp.ClientError, OSError, TimeoutError) as exception:
       logger.warning(
         'WS: cannot reach printer at %s: %s', self._printer_ws_url, exception
       )
@@ -196,8 +198,12 @@ class WSProxy:
       return await self._forward_raw(request, raw_body)
 
     upload_uuid = fields.get('Uuid', '')
-    offset = int(fields.get('Offset', '0'))
-    total_size = int(fields.get('TotalSize', '0'))
+    try:
+      offset = int(fields.get('Offset', '0'))
+      total_size = int(fields.get('TotalSize', '0'))
+    except (ValueError, TypeError):
+      logger.warning('CC1 upload: invalid Offset/TotalSize, forwarding raw')
+      return await self._forward_raw(request, raw_body)
     file_md5 = fields.get('S-File-MD5', '')
     file_data = fields.get('file_data', b'')
     filename = fields.get('filename')
@@ -260,25 +266,26 @@ class WSProxy:
         self._sessions[upload_uuid] = session
       await session.lock.acquire()
 
+    is_complete = False
     try:
       await asyncio.to_thread(session.write_chunk, offset, file_data)
-      is_complete = session.complete
+      if session.complete:
+        is_complete = True
+        try:
+          path, _metadata = await asyncio.to_thread(
+            session.finalize,
+            filename_hint=filename,
+          )
+          logger.info('CC1 upload complete: %s', path.name)
+        except Exception:
+          logger.exception('Failed to finalize CC1 upload')
     finally:
       session.lock.release()
 
     if is_complete:
-      try:
-        path, _metadata = await asyncio.to_thread(
-          session.finalize,
-          filename_hint=filename,
-        )
-        logger.info('CC1 upload complete: %s', path.name)
-      except Exception:
-        logger.exception('Failed to finalize CC1 upload')
-      finally:
-        async with self._lock:
-          if self._sessions.get(upload_uuid) is session:
-            del self._sessions[upload_uuid]
+      async with self._lock:
+        if self._sessions.get(upload_uuid) is session:
+          del self._sessions[upload_uuid]
 
   # ---- multipart parsing ----
 
@@ -413,9 +420,7 @@ class WSProxy:
         async with session.lock:
           await asyncio.to_thread(session.discard)
         del self._sessions[session_uuid]
-        logger.warning(
-          'Discarded stale CC1 upload session (uuid=%s)', session_uuid[:8]
-        )
+        logger.warning('Discarded stale CC1 upload session (uuid=%s)', session_uuid[:8])
     return len(stale)
 
   async def cleanup_stale_sessions(self) -> None:
