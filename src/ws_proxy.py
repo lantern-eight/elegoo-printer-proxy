@@ -57,6 +57,7 @@ class _CC1UploadSession:
     self._fh.seek(offset)
     self._fh.write(data)
     self._fh.flush()
+    # High-water mark; assumes CC1 sends chunks sequentially (no gaps).
     self.bytes_written = max(self.bytes_written, offset + len(data))
 
   @property
@@ -246,6 +247,9 @@ class WSProxy:
     file_data: bytes,
     filename: str | None,
   ) -> None:
+    # Acquire self._lock to look up / create the session, then acquire
+    # session.lock before releasing self._lock (end of `async with`).
+    # This avoids holding the global lock during the blocking write.
     async with self._lock:
       session = self._sessions.get(upload_uuid)
       if session is None or offset == 0:
@@ -376,7 +380,11 @@ class WSProxy:
       async with self._client.request(
         request.method,
         f'{self._printer_http_url}{request.path_qs}',
-        headers={'Content-Type': request.content_type},
+        headers={
+          header_name: header_value
+          for header_name, header_value in request.headers.items()
+          if header_name.lower() not in ('host', 'connection', 'transfer-encoding')
+        },
         data=raw_body,
       ) as response:
         response_body = await response.read()
@@ -391,22 +399,27 @@ class WSProxy:
 
   # ---- stale session reaper ----
 
+  async def _cleanup_once(self) -> int:
+    '''Single pass: discard uploads older than upload_timeout. Returns count.'''
+    cutoff = time.monotonic() - self._config.upload_timeout
+    async with self._lock:
+      stale = [
+        session_uuid
+        for session_uuid, session in self._sessions.items()
+        if session.created < cutoff
+      ]
+      for session_uuid in stale:
+        session = self._sessions[session_uuid]
+        async with session.lock:
+          await asyncio.to_thread(session.discard)
+        del self._sessions[session_uuid]
+        logger.warning(
+          'Discarded stale CC1 upload session (uuid=%s)', session_uuid[:8]
+        )
+    return len(stale)
+
   async def cleanup_stale_sessions(self) -> None:
     '''Periodically discard uploads that never completed.'''
     while True:
       await asyncio.sleep(60)
-      cutoff = time.monotonic() - self._config.upload_timeout
-      async with self._lock:
-        stale = [
-          session_uuid
-          for session_uuid, session in self._sessions.items()
-          if session.created < cutoff
-        ]
-        for session_uuid in stale:
-          session = self._sessions[session_uuid]
-          async with session.lock:
-            await asyncio.to_thread(session.discard)
-          del self._sessions[session_uuid]
-          logger.warning(
-            'Discarded stale CC1 upload session (uuid=%s)', session_uuid[:8]
-          )
+      await self._cleanup_once()

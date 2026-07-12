@@ -270,19 +270,9 @@ class TestWSProxyStaleCleanup:
     fresh = _CC1UploadSession('fresh-uuid', 2000, 'md5', storage)
     proxy._sessions['fresh-uuid'] = fresh
 
-    cutoff = time.monotonic() - config.upload_timeout
-    async with proxy._lock:
-      stale_keys = [
-        session_uuid
-        for session_uuid, session in proxy._sessions.items()
-        if session.created < cutoff
-      ]
-      for session_uuid in stale_keys:
-        session = proxy._sessions[session_uuid]
-        async with session.lock:
-          session.discard()
-        del proxy._sessions[session_uuid]
+    removed = await proxy._cleanup_once()
 
+    assert removed == 1
     assert 'stale-uuid' not in proxy._sessions
     assert 'fresh-uuid' in proxy._sessions
 
@@ -295,19 +285,9 @@ class TestWSProxyStaleCleanup:
     fresh = _CC1UploadSession('fresh-uuid', 1000, 'md5', storage)
     proxy._sessions['fresh-uuid'] = fresh
 
-    cutoff = time.monotonic() - config.upload_timeout
-    async with proxy._lock:
-      stale_keys = [
-        session_uuid
-        for session_uuid, session in proxy._sessions.items()
-        if session.created < cutoff
-      ]
-      for session_uuid in stale_keys:
-        session = proxy._sessions[session_uuid]
-        async with session.lock:
-          session.discard()
-        del proxy._sessions[session_uuid]
+    removed = await proxy._cleanup_once()
 
+    assert removed == 0
     assert 'fresh-uuid' in proxy._sessions
 
 

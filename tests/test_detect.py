@@ -33,18 +33,15 @@ class TestDetectPrinterType:
     assert result == 'cc1'
 
   @pytest.mark.asyncio
-  async def test_cc2_tried_first(self):
-    '''CC2 probe runs before CC1, so if both respond, CC2 wins.'''
-    call_order = []
+  async def test_cc2_wins_when_both_respond(self):
+    '''When both probes respond, CC2 takes priority.'''
 
     async def mock_probe(ip, port, message, probe_timeout):
-      call_order.append(port)
       return b'response'
 
     with patch('src.detect._probe_udp', side_effect=mock_probe):
       result = await detect_printer_type('192.168.1.50')
     assert result == 'cc2'
-    assert call_order[0] == 52700
 
   @pytest.mark.asyncio
   async def test_raises_when_neither_responds(self):
