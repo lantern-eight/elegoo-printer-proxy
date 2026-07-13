@@ -122,3 +122,31 @@ done
 echo
 echo 'Done. The IPs are active now and persist across reboots.'
 echo 'Verify from another machine on the LAN:  ping <proxy-ip>'
+
+# 5. Pre-flight check: binding a specific IP to a port below 1024 requires
+#    Docker Desktop's privileged helper (com.docker.vmnetd) — macOS only
+#    exempts wildcard (0.0.0.0) binds from the root requirement. The helper
+#    is installed by a Docker Desktop setting, not by this script: it is
+#    Docker-private machinery that Docker Desktop's updater manages.
+needs_vmnetd='false'
+while read -r host_port; do
+  if ((host_port < 1024)); then
+    needs_vmnetd='true'
+    break
+  fi
+done < <(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+:[0-9]+"' "${compose_file}" \
+  | cut -d '"' -f 2 | cut -d ':' -f 2)
+
+if [[ ${needs_vmnetd} == 'true' ]] \
+    && [[ ! -f /Library/PrivilegedHelperTools/com.docker.vmnetd ]]; then
+  echo
+  echo 'WARNING: docker-compose.yml binds a privileged port (<1024) to a'
+  echo "specific IP, but Docker Desktop's privileged helper is not installed."
+  echo '`docker compose up` will fail with "ports are not available …'
+  echo 'com.docker.vmnetd.sock: no such file or directory".'
+  echo
+  echo 'One-time fix: Docker Desktop → Settings → Advanced →'
+  echo '  enable "Allow privileged port mapping", then Apply & restart.'
+  echo 'See README section "macOS: enable privileged port mapping".'
+  exit 2
+fi

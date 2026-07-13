@@ -126,6 +126,8 @@ cp .env.example .env.cc1   # set PRINTER_IP=<real CC1 IP>, PRINTER_TYPE=cc1
 
 # 4. Give the host the proxy IPs (persistent across reboots)
 sudo ./scripts/setup_macos_ips.sh          # macOS — reads IPs from docker-compose.yaml
+# macOS also needs a one-time Docker Desktop setting — see
+#   "macOS: enable privileged port mapping" below
 # Linux equivalent: sudo ip addr add <proxy-ip>/24 dev eth0
 #   (persist via your distro's network config, e.g. netplan/systemd-networkd)
 
@@ -151,6 +153,34 @@ Ethernet port — using `networksetup`. Services persist across reboots (a plain
 `ifconfig alias` would not) and show up in System Settings where they're easy to
 inspect or remove. The script is idempotent: re-run it after adding a printer to
 the compose file.
+
+### macOS: Enable privileged port mapping (one-time)
+
+macOS allows unprivileged processes to bind ports below 1024 **only on the
+wildcard address** (`0.0.0.0`). Binding a *specific* IP to port 80 — exactly what
+this deployment does — requires root, so Docker Desktop must delegate those binds
+to its privileged helper (`com.docker.vmnetd`). Without the helper installed,
+`docker compose up` fails with:
+
+```
+Error response from daemon: ports are not available: exposing port
+TCP 192.168.x.x:80 -> 127.0.0.1:0: connecting to /var/run/com.docker.vmnetd.sock:
+dial unix /var/run/com.docker.vmnetd.sock: connect: no such file or directory
+```
+
+Enable it once:
+
+**Docker Desktop → Settings → Advanced → "Allow privileged port
+mapping"**
+
+Then Apply & restart (asks for an admin password to install the helper; the restart
+briefly stops all containers on the host). The unprivileged ports (1883, 3030, 8080,
+9001) never need this — only the `:80` bindings do.
+
+`setup_macos_ips.sh` checks for this automatically: if the compose file binds a
+privileged port and the helper is missing, the script exits with these
+instructions. The script deliberately does not install the helper itself, it is
+Docker-private machinery that Docker Desktop's settings flow and updater manage.
 
 ## Archive Layout
 
