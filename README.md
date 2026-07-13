@@ -1,14 +1,15 @@
-# CC2 G-Code Capture Proxy
+# Elegoo Printer Proxy
 
-A lightweight local-network reverse proxy that sits between **ElegooSlicer** and an
-**Elegoo Centauri Carbon 2** printer, transparently capturing every G-code file at
-upload time.
+A lightweight local-network reverse proxy that sits between **ElegooSlicer** and
+**Elegoo Centauri Carbon** printers, transparently capturing every G-code file at
+upload time. Supports any mix of **CC1** (Centauri Carbon) and **CC2**
+(Centauri Carbon 2) printers — one proxy instance per printer.
 
 ## Why?
 
-The CC2 with its Canvas (AMS) system reports only a *total* filament usage value over
-MQTT. The **per-slot breakdown** (how much each spool contributed) exists only inside
-the G-code file. There's no way to retrieve a file from the printer after it's been
+Printers's Canvas (AMS) systems report only a *total* filament usage value to network
+clients. The **per-slot breakdown** (how much each spool contributed) exists only inside
+the G-code file, and printers don't expose a way to retrieve a file after it's been
 sent.
 
 This proxy solves that by saving a copy of every G-code file as it passes through,
@@ -16,32 +17,59 @@ enabling per-spool filament tracking with Home Assistant + Spoolman.
 
 ### Why not just download the file from the printer?
 
-The CC2 stock firmware stores G-code at `/opt/usr/gcode` internally but exposes no
-mechanism to retrieve file content over the network.
+Stock firmware stores G-code internally (e.g. `/opt/usr/gcode` on the CC2) but
+exposes no mechanism to retrieve file content over the network.
 
 Flashing [OpenCentauri][opencentauri] firmware is an option that works. This proxy
 solution is for anyone who may not want to flash a new firmware.
 
-A reverse proxy is a straightforward solution: one IP change in the slicer, forward all
-traffic to the printer, save a copy of the G-code file, set and forget. Because this
-forwards all traffic to the printer, the slicer's Device page (controls, camera, file
-list) works normally.
+A reverse proxy is a straightforward solution: one IP change in the slicer, forward
+all traffic to the printer, save a copy of the G-code file, set and forget. Because
+this forwards all traffic to the printer, the slicer's Device page (controls, camera,
+file list) works normally.
 
-> **Note:** This is a workaround while Elegoo does not expose per-filament variables or
-> allow G-code download from the printer. If Elegoo adds either of those in a future
-> firmware or API, this proxy will no longer be needed.
+> **Note:** This is a workaround while Elegoo does not expose per-filament variables
+> or allow G-code download from the printer. If Elegoo adds either of those in a
+> future firmware or API, this proxy will no longer be needed.
 
 ## How It Works
 
 ```
-ElegooSlicer ──HTTP PUT /upload──▶ Proxy ──forward──▶ CC2 Printer
-                                    │
-                                    ├── parse G-code head/tail (~68 KB)
-                                    └── save JSON metadata to gcode-archive/
-                                       (optionally keep full .gcode file)
+ElegooSlicer ──upload──▶ Proxy ──forward──▶ Printer
+                           │
+                           ├── parse G-code head/tail (~68 KB)
+                           └── save JSON metadata to gcode-archive/
+                              (optionally keep full .gcode file)
 ```
 
-### Upload Protocol
+Each printer type speaks a different protocol, so the proxy starts different
+services depending on `PRINTER_TYPE`:
+
+**CC2** (MQTT-based):
+
+| Port | Protocol | Behavior |
+|------|----------|----------|
+| 80   | HTTP     | Intercepts `PUT /upload`, saves metadata, forwards to printer. Also serves the REST API (`/api/*`). |
+| 1883 | MQTT     | Transparent TCP pass-through (used by the slicer's C++ library) |
+| 9001 | MQTT-WS  | Transparent TCP pass-through (MQTT over WebSocket, used by the Device page's JS) |
+| 8080 | MJPEG    | Transparent TCP pass-through (camera stream) |
+
+The CC2 exposes MQTT on two ports: 1883 (TCP, used by the slicer's C++ elegoo-link
+library) and 9001 (WebSocket, used by the Device page's bundled JavaScript). Both
+must be proxied for full functionality.
+
+**CC1** (WebSocket/SDCP-based):
+
+| Port | Protocol | Behavior |
+|------|----------|----------|
+| 3030 | WS + HTTP | Relays the SDCP WebSocket (status, controls) and intercepts multipart `POST /uploadFile/upload` chunks. |
+| 80   | HTTP     | Serves the REST API (`/api/*`), passes everything else through to the printer. |
+| 8080 | MJPEG    | Transparent TCP pass-through. Closed on CC1 firmware V1.4.46 — kept for older/future firmware, harmless when unused. |
+
+The CC1 uploads G-code as multipart form POSTs in 1 MB chunks over port 3030 — the
+same port as its control WebSocket — so a single smart service handles both.
+
+### CC2 Upload Protocol
 
 The slicer uses a **chunked upload** protocol: it splits the G-code file into many
 small HTTP PUT requests, each carrying a `Content-Range` header (e.g.,
@@ -53,98 +81,156 @@ In rare cases (small files, non-standard clients) the slicer may send the entire
 in a single PUT request with no `Content-Range` header. The proxy streams such
 single-shot uploads to disk to avoid OOM on resource-constrained hosts.
 
-The proxy runs four services:
+### CC1 Upload Protocol
 
-| Port | Protocol | Behavior |
-|------|----------|----------|
-| 80   | HTTP     | Intercepts `PUT /upload`, saves metadata, forwards to printer. Also serves the REST API (`/api/*`). |
-| 1883 | MQTT     | Transparent TCP pass-through (used by the slicer's C++ library) |
-| 9001 | MQTT-WS  | Transparent TCP pass-through (MQTT over WebSocket, used by the Device page's JS) |
-| 8080 | MJPEG    | Transparent TCP pass-through |
+Chunked as well, but as multipart form POSTs: each 1 MB chunk carries the upload's
+UUID, byte offset, total size, and MD5. The proxy reassembles chunks by UUID,
+forwards each request to the printer verbatim, and archives the file once the
+printer confirms the final chunk.
 
-The slicer is pointed at the proxy IP instead of the printer. The four TCP relays
-mean the slicer's Device page (controls, camera, file list, temperatures) works
-normally. The CC2 printer exposes MQTT on two ports: 1883 (TCP, used by the
-slicer's C++ elegoo-link library) and 9001 (WebSocket, used by the Device page's
-bundled JavaScript). Both must be proxied for full functionality.
+## One IP per printer
+
+**Every printer's proxy gets its own dedicated LAN IP.**
+
+1. **The slicer only accepts an IP address** — there is no port override in its
+   printer settings. The proxy must be reachable on the exact ports the printer
+   protocol dictates.
+2. **Connections carry no printer identity.** An incoming `PUT /upload` or MQTT
+   connection says nothing about *which* CC2 it is destined for, so one listener
+   can't route between two same-type printers.
+3. Therefore two printers of the same type would collide on ports if their proxies
+   shared an IP. Giving each proxy its own IP makes port collisions **structurally
+   impossible** — for any number of printers, including future models that reuse
+   the same ports.
+
+Scaling to another printer is: add one IP, copy one compose service block, create
+one env file. The IPs are cheap — secondary addresses on the Docker host's existing
+network interface, no extra hardware or VMs.
+
+Pick proxy IPs **outside your router's DHCP pool** (or reserve them) so the router
+never hands them to another device. The host claims them directly, the router is
+not asked.
 
 ## Quick Start
 
 ```bash
 # 1. Clone repo, cd to it
-cd cc2-gcode-capture-proxy
 
-# 2. Configure
-cp .env.example .env
-# Edit .env and set PRINTER_IP to the CC2's address
+# 2. Compose file — set one service per printer, with your chosen proxy IPs
+cp docker-compose.example.yml docker-compose.yml
+# Edit: proxy IPs in the port bindings, one service block per printer
 
-# 3. Run
-docker compose up -d
+# 3. Env files — one per printer
+cp .env.example .env.cc2   # set PRINTER_IP=<real CC2 IP>, PRINTER_TYPE=cc2
+cp .env.example .env.cc1   # set PRINTER_IP=<real CC1 IP>, PRINTER_TYPE=cc1
+
+# 4. Give the host the proxy IPs (persistent across reboots)
+sudo ./scripts/setup_macos_ips.sh          # macOS — reads IPs from docker-compose.yaml
+# Linux equivalent: sudo ip addr add <proxy-ip>/24 dev eth0
+#   (persist via your distro's network config, e.g. netplan/systemd-networkd)
+
+# 5. Build and run
+docker compose up -d --build
+
+# 6. Verify each proxy from another machine
+curl http://<proxy-ip>/api/health          # {"status": "ok", "printer_type": ...}
 ```
 
-Parsed metadata is written to the archive directory as lightweight JSON files. By
-default, full `.gcode` files are **not** stored — only the JSON sidecar — keeping disk
-usage minimal. Set `STORE_GCODE=true` to also keep the raw G-code files alongside.
+Then point the slicer at the proxy IPs (see [Slicer Setup](#slicer-setup)).
 
-With the default `docker-compose.yml`, the local `./gcode-archive/` folder is mounted
-into the container at `/data/gcode`.
+### What the macOS script does
 
-Layout:
+Docker Desktop on macOS can't give containers their own LAN IPs (macvlan doesn't
+escape its hidden VM), but it *can* bind published ports to a specific host IP.
+So the host carries one extra IP per printer, and each container binds only its
+printer's IP.
+
+`scripts/setup_macos_ips.sh` creates those IPs as macOS **network services** — the
+CLI equivalent of System Settings → Network → adding a service on the same
+Ethernet port — using `networksetup`. Services persist across reboots (a plain
+`ifconfig alias` would not) and show up in System Settings where they're easy to
+inspect or remove. The script is idempotent: re-run it after adding a printer to
+the compose file.
+
+## Archive Layout
+
+Parsed metadata is written per printer as lightweight JSON files. By default, full
+`.gcode` files are **not** stored — only the JSON sidecar — keeping disk usage
+minimal. Set `STORE_GCODE=true` to also keep the raw G-code files alongside.
 
 ```
-gcode-archive/          ← on host (same as /data/gcode inside container)
-├── 2026-03-06/
-│   ├── 2026-03-06T19-16-22_CC2_benchy.json          ← always written
-│   ├── 2026-03-06T19-16-22_CC2_benchy.gcode         ← only if STORE_GCODE=true
-│   └── 2026-03-06T20-45-11_CC2_bracket.json
-└── 2026-03-07/
-    └── …
+gcode-archive/               ← on host
+├── cc1/                     ← mounted at /data/gcode in the CC1 container
+│   └── 2026-03-06/
+│       └── 2026-03-06T19-16-22_benchy.json
+└── cc2/                     ← mounted at /data/gcode in the CC2 container
+    └── 2026-03-06/
+        ├── 2026-03-06T19-16-22_CC2_benchy.json   ← always written
+        └── 2026-03-06T19-16-22_CC2_benchy.gcode  ← only if STORE_GCODE=true
 ```
 
-If permission errors writing to `gcode-archive` happen, create it before first run so
-it's owned by the local user: `mkdir -p gcode-archive`. (If Docker creates it, it may
+If permission errors writing to `gcode-archive` happen, create the per-printer
+directories before first run so they're owned by the local user:
+`mkdir -p gcode-archive/cc1 gcode-archive/cc2`. (If Docker creates them, they may
 be root-owned.)
 
-**Disk space note:** Even in JSON-only mode, the proxy needs enough free disk to hold
-one temporary `.gcode` file at a time during upload (it streams chunks to a temp file,
-parses the metadata, then deletes the temp file). Plan for at least as much free space
-as the largest file the slicer might send.
+**Disk space note:** Even in JSON-only mode, the proxy needs enough free disk to
+hold one temporary `.gcode` file at a time during upload (it streams chunks to a
+temp file, parses the metadata, then deletes the temp file). Plan for at least as
+much free space as the largest file the slicer might send.
+
+## Upgrading from v1 (single-CC2 setup)
+
+v1 ran one container with host-wide port bindings and a single `.env`. To upgrade:
+
+```bash
+# 1. Stop the old container
+docker compose down
+
+# 2. Split the config: the old .env becomes the CC2 env file
+mv .env .env.cc2            # then add PRINTER_TYPE=cc2
+
+# 3. Move the existing archive under the per-printer directory
+mkdir -p gcode-archive/cc2
+mv gcode-archive/20* gcode-archive/cc2/    # all date directories
+
+# 4. New compose file with per-printer IPs (see Quick Start), then:
+sudo ./scripts/setup_macos_ips.sh
+docker compose up -d --build
+```
+
+Finally, update the slicer's CC2 entry from the old host IP to the CC2 proxy's new
+dedicated IP.
 
 ## Configuration
 
-All settings come from environment variables (or `.env`):
+Each container reads its settings from its env file (`.env.cc1` / `.env.cc2`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PRINTER_IP` | `192.168.1.100` | CC2 printer IP address |
-| `HTTP_PORT` | `80` | Proxy HTTP listen port |
-| `MQTT_PORT` | `1883` | Proxy MQTT listen port |
-| `MQTT_WS_PORT` | `9001` | Proxy MQTT-over-WebSocket listen port (Device page JS) |
+| `PRINTER_IP` | `192.168.1.100` | The real printer's IP address |
+| `PRINTER_TYPE` | `auto` | `cc1`, `cc2`, or `auto` (probes the printer via UDP discovery at startup) |
+| `HTTP_PORT` | `80` | Proxy HTTP listen port (REST API, CC2 uploads) |
+| `MQTT_PORT` | `1883` | Proxy MQTT listen port (CC2) |
+| `MQTT_WS_PORT` | `9001` | Proxy MQTT-over-WebSocket listen port (CC2 Device page JS) |
+| `WS_PORT` | `3030` | Proxy WebSocket/SDCP listen port (CC1 control + uploads) |
 | `CAMERA_PORT` | `8080` | Proxy camera listen port |
 | `GCODE_DIR` | `/data/gcode` | Archive directory (inside container) |
 | `RETENTION_DAYS` | `90` | Auto-delete files older than this (0 = keep forever) |
 | `GCODE_TZ` | `UTC` | IANA timezone for file timestamps and date directories (e.g. `America/New_York`) |
 | `UPLOAD_TIMEOUT` | `300` | Seconds before an incomplete chunked upload is discarded |
-| `MAX_BODY_SIZE` | `268435456` (256 MB) | Maximum request body size in bytes. Caps single-shot uploads to prevent OOM on resource-constrained hosts (e.g. Raspberry Pi). Chunked uploads send small requests regardless of total file size. Set to `0` to disable (not recommended). |
-| `STORE_GCODE` | `false` | Keep full `.gcode` files alongside JSON metadata. When `false` (default), only lightweight JSON metadata is stored and the raw G-code is discarded after parsing. Set to `true` to archive the original files (requires more disk space). |
+| `MAX_BODY_SIZE` | `268435456` (256 MB) | Maximum request body size in bytes. Caps single-shot uploads to prevent OOM on resource-constrained hosts. Chunked uploads send small requests regardless of total file size. Set to `0` to disable (not recommended). |
+| `STORE_GCODE` | `false` | Keep full `.gcode` files alongside JSON metadata. When `false` (default), only lightweight JSON metadata is stored and the raw G-code is discarded after parsing. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-
-### Port Conflicts
-
-The proxy must listen on ports 80, 1883, 9001, and 8080 — it masquerades as the printer,
-and the slicer only accepts an IP address (no port override). All four ports are used:
-HTTP for uploads, MQTT (1883) for the slicer library's status/controls, MQTT-WS (9001)
-for the Device page's JavaScript, and 8080 for the camera stream. If something else on
-the host already uses any of these ports, that service must be reconfigured or moved.
 
 ### Non-Root Container & Port 80
 
 The container runs as a non-root user (`appuser`) for security. Binding to port 80
 normally requires root on Linux, but the slicer expects port 80 and the printer
 configuration cannot be changed. The solution is `CAP_NET_BIND_SERVICE`: the
-`docker-compose.yml` adds this capability so the process can bind to privileged ports
-without running as root. This is a minimal, well-understood privilege—common for web
-servers and proxies—and avoids the risks of a full root container.
+`docker-compose.yml` adds this capability so the process can bind to privileged
+ports without running as root. This is a minimal, well-understood privilege — common
+for web servers and proxies — and avoids the risks of a full root container.
 
 ### Security
 
@@ -154,16 +240,19 @@ exposed to the internet.
 
 ## Slicer Setup
 
-1. Change the printer IP from the CC2's address to the proxy host IP.
-1. The slicer connects through the proxy. Controls, camera, and file list work normally.
-1. Every "Upload and Print" now saves a G-code copy automatically.
+- **CC2**: In the printer settings, change the printer IP from the CC2's real
+  address to the CC2 proxy's IP. Controls, camera, and file list work normally.
+- **CC1**: Add the printer by IP, using the CC1 proxy's IP instead of the real
+  printer address. The slicer connects over SDCP (port 3030) through the proxy.
+  (The proxy does not answer discovery broadcasts, so auto-discovery finds the
+  real printer — add by IP instead.)
 
 ## REST API
 
-The proxy exposes a lightweight REST API on the same HTTP port (80) for querying
-captured G-code metadata. This is how the
-[Elegoo Home Assistant integration][elegoo_homeassistant] retrieves per-slot filament
-data.
+Each proxy instance exposes a lightweight REST API on its own IP (HTTP port 80)
+for querying captured G-code metadata — the same endpoints for both printer types.
+This is how the [Elegoo Home Assistant integration][elegoo_homeassistant] retrieves
+per-slot filament data.
 
 ### Endpoints
 
@@ -208,17 +297,19 @@ no files have been captured yet.
 **`GET /api/health`**
 
 Returns `{"status": "ok"}` with optional `printer_ip` and `printer_type` fields
-when configured. Useful for checking proxy connectivity.
+when configured. Useful for checking proxy connectivity and confirming which
+printer a proxy instance serves.
 
 ## Elegoo Home Assistant Integration
 
-Home Assistant connects **directly** to the printer's MQTT broker. It does not go
-through the proxy.
+Home Assistant connects **directly** to each printer (MQTT for CC2, WebSocket for
+CC1). It does not go through the proxy.
 
-The HA integration queries the proxy's REST API to get per-slot filament data:
+The HA integration queries each proxy's REST API to get per-slot filament data:
 
-1. A print starts — HA learns the filename from the printer via MQTT.
-2. HA calls `GET /api/filament?filename=<name>` on the proxy.
+1. A print starts — HA learns the filename from the printer.
+2. HA calls `GET /api/filament?filename=<name>` on that printer's proxy IP
+   (the integration's `gcode_proxy_url` setting, one per printer).
 3. The proxy returns per-slot filament weight, type, and cost data.
 
 **Alternative: shared filesystem.** If the proxy and HA run on the same host (or share
@@ -228,19 +319,20 @@ across hosts with no filesystem setup.
 
 ## Running Without Docker
 
-Requires [uv][uv]. The proxy must use ports 80, 1883, 9001, and 8080
-for slicer compatibility (same as with Docker). Binding to port 80 typically requires
-root on Unix:
+Requires [uv][uv]. The proxy must use the standard printer ports for slicer
+compatibility (same as with Docker). Binding to port 80 typically requires root on
+Unix:
 
 ```bash
 export PRINTER_IP=192.168.1.100
+export PRINTER_TYPE=cc2
 export GCODE_DIR=./gcode-archive
 
 sudo uv run python -m src.main
 ```
 
-Docker is recommended. It avoids privilege requirements and handles port binding
-cleanly.
+Docker is recommended. It avoids privilege requirements, handles port binding
+cleanly, and makes running one instance per printer straightforward.
 
 ## Development
 
@@ -283,10 +375,13 @@ requests.
 
 For the full CC2 protocol reference — MQTT topics, registration flow, file detail
 responses, and stock firmware capabilities see the open-source Elegoo repos:
-[CentauriCarbon][centauricarbon], [ElegooSlicer][elegooslicer],
+[CentauriCarbon2][centauricarbon2], [ElegooSlicer][elegooslicer],
 [elegoo-link][elegoo_link]. Also the [CC2_PROTOCOL.md][cc2_protocol] in the
 [elegoo-homeassistant][elegoo_homeassistant] repo is a good reference.
 
+The CC1 speaks SDCP (WebSocket JSON-RPC on port 3030, UDP discovery on port 3000), at
+[CentauriCarbon][centauricarbon], and the [elegoo-homeassistant][elegoo_homeassistant]
+repo documents it as well.
 
 ## Releasing
 
@@ -300,13 +395,13 @@ Or manually:
 1. **Update the version** in `pyproject.toml`, then commit:
 
     ```toml
-    version = "1.1.0"
+    version = "2.0.0"
     ```
 
 1. **Create an annotated tag**:
 
     ```bash
-    git tag -a v1.1.0 -m "v1.1.0"
+    git tag -a v2.0.0 -m "v2.0.0"
     ```
 
 1. **Push the commit and tag**:
@@ -318,7 +413,7 @@ Or manually:
 1. **Create a GitHub Release** from the tag (requires [GitHub CLI](https://cli.github.com/)):
 
     ```bash
-    gh release create v1.1.0 --generate-notes
+    gh release create v2.0.0 --generate-notes
     ```
 
 
@@ -331,6 +426,7 @@ See [LICENSE](LICENSE).
 [uv]: https://docs.astral.sh/uv/
 [cc2_protocol]: https://github.com/danielcherubini/elegoo-homeassistant/blob/main/docs/CC2_PROTOCOL.md
 [centauricarbon]: https://github.com/elegooofficial/CentauriCarbon
+[centauricarbon2]: https://github.com/elegooofficial/CentauriCarbon2
 [elegooslicer]: https://github.com/ELEGOO-3D/ElegooSlicer
 [elegoo_link]: https://github.com/ELEGOO-3D/elegoo-link
 [elegoo_homeassistant]: https://github.com/danielcherubini/elegoo-homeassistant
