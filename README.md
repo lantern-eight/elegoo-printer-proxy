@@ -62,12 +62,25 @@ must be proxied for full functionality.
 
 | Port | Protocol | Behavior |
 |------|----------|----------|
-| 3030 | WS + HTTP | Relays the SDCP WebSocket (status, controls) and intercepts multipart `POST /uploadFile/upload` chunks. |
+| 3030 | WS + HTTP | Relays the SDCP WebSocket (status, controls) and intercepts multipart `POST /uploadFile/upload` chunks. Rewrites `MainboardIP` in relayed frames to the proxy's own address. |
+| 3000/udp | SDCP discovery | Forwards discovery probes to the printer and rewrites `MainboardIP` in the reply, so the slicer routes uploads through the proxy. Requires `ADVERTISE_IP`. |
 | 80   | HTTP     | Serves the REST API (`/api/*`), passes everything else through to the printer. |
 | 8080 | MJPEG    | Transparent TCP pass-through. Closed on CC1 firmware V1.4.46 — kept for older/future firmware, harmless when unused. |
 
 The CC1 uploads G-code as multipart form POSTs in 1 MB chunks over port 3030 — the
 same port as its control WebSocket — so a single smart service handles both.
+
+**Why the `MainboardIP` rewrite matters:** the slicer takes the printer's
+address from SDCP payloads (discovery replies, status frames) rather than the
+configured connection address — so without the rewrite it connects its
+WebSocket to the proxy but sends uploads straight to the printer, bypassing
+capture. `ADVERTISE_IP` tells the proxy which address to present as the
+printer's.
+
+**Video streams stay direct by design.** The printer hands clients a stream
+URL embedding its real address (port 3031), and the proxy leaves that URL
+untouched. Camera views in the slicer and Home Assistant connect directly to the
+printer.
 
 ### CC2 Upload Protocol
 
@@ -244,6 +257,8 @@ Each container reads its settings from its env file (`.env.cc1` / `.env.cc2`):
 | `MQTT_PORT` | `1883` | Proxy MQTT listen port (CC2) |
 | `MQTT_WS_PORT` | `9001` | Proxy MQTT-over-WebSocket listen port (CC2 Device page JS) |
 | `WS_PORT` | `3030` | Proxy WebSocket/SDCP listen port (CC1 control + uploads) |
+| `DISCOVERY_PORT` | `3000` | Proxy UDP discovery relay listen port (CC1) |
+| `ADVERTISE_IP` | *(unset)* | The proxy's own LAN address (its dedicated per-printer IP). **Required for CC1 capture**: advertised as `MainboardIP` in discovery replies and status frames so the slicer uploads through the proxy. When unset, the slicer learns the real printer address and uploads bypass the proxy. |
 | `CAMERA_PORT` | `8080` | Proxy camera listen port |
 | `GCODE_DIR` | `/data/gcode` | Archive directory (inside container) |
 | `RETENTION_DAYS` | `90` | Auto-delete files older than this (0 = keep forever) |

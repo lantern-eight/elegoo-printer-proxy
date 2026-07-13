@@ -97,6 +97,7 @@ async def _run() -> None:
   # --- Type-specific services ---
   servers = []
   ws_proxy = None
+  discovery_transport = None
   background_tasks = [
     asyncio.create_task(storage.periodic_cleanup()),
     asyncio.create_task(http_proxy.cleanup_stale_sessions()),
@@ -122,6 +123,16 @@ async def _run() -> None:
     servers.append(
       await start_tcp_proxy(config.camera_port, config.printer_ip, 8080, 'Camera')
     )
+    if config.advertise_ip:
+      from .discovery_relay import start_discovery_relay
+
+      discovery_transport = await start_discovery_relay(config)
+    else:
+      logger.warning(
+        'ADVERTISE_IP not set! Discovery relay disabled. The slicer will '
+        'learn the real printer address and upload directly, bypassing '
+        'gcode capture by the proxy.'
+      )
 
   logger.info(
     'All services started — proxying %s to %s, API at /api/',
@@ -142,6 +153,8 @@ async def _run() -> None:
     task.cancel()
   for server in servers:
     server.close()
+  if discovery_transport:
+    discovery_transport.close()
   if ws_proxy:
     await ws_proxy.stop()
   await asyncio.gather(

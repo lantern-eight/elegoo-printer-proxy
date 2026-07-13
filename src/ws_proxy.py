@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import aiohttp
 from aiohttp import web
 
+from .discovery_relay import rewrite_mainboard_ip
 from .storage import GCodeStorage
 
 if TYPE_CHECKING:
@@ -118,6 +119,21 @@ class WSProxy:
       await asyncio.to_thread(session.discard)
     self._sessions.clear()
 
+  def _rewrite_outbound(self, data: str) -> str:
+    '''
+    Rewrite MainboardIP in printer→slicer frames to the advertised IP.
+
+    The slicer uses MainboardIP from printer payloads for follow-up
+    operations (notably uploads); without the rewrite those bypass the
+    proxy. No-op when ADVERTISE_IP is not configured.
+    '''
+    advertise_ip = self._config.advertise_ip
+    printer_ip = self._config.printer_ip
+    if not advertise_ip or not printer_ip or 'MainboardIP' not in data:
+      return data
+    rewritten = rewrite_mainboard_ip(data.encode('utf-8'), printer_ip, advertise_ip)
+    return rewritten.decode('utf-8')
+
   # ---- request routing ----
 
   async def handle_request(self, request: web.Request) -> web.StreamResponse:
@@ -153,7 +169,7 @@ class WSProxy:
         async def printer_to_slicer():
           async for message in printer_ws:
             if message.type == aiohttp.WSMsgType.TEXT:
-              await slicer_ws.send_str(message.data)
+              await slicer_ws.send_str(self._rewrite_outbound(message.data))
             elif message.type == aiohttp.WSMsgType.BINARY:
               await slicer_ws.send_bytes(message.data)
             elif message.type in (

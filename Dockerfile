@@ -21,7 +21,7 @@ COPY src/ src/
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
 
 # HTTP proxy, MQTT TCP, WebSocket/SDCP, camera stream, MQTT WebSocket
-EXPOSE 80 1883 3030 8080 9001
+EXPOSE 80 1883 3030 8080 9001 3000/udp
 
 USER appuser
 

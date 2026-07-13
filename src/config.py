@@ -27,6 +27,13 @@ def _parse_printer_type() -> str:
   return raw
 
 
+def _parse_advertise_ip() -> str | None:
+  raw = os.getenv('ADVERTISE_IP')
+  if not raw or not raw.strip():
+    return None
+  return str(ipaddress.ip_address(raw.strip()))
+
+
 def _parse_port(env_var: str, default: int) -> int:
   value = int(os.getenv(env_var, str(default)))
   if not 1 <= value <= 65535:
@@ -61,6 +68,15 @@ class Config:
   ws_port: int = field(
     default_factory=lambda: _parse_port('WS_PORT', 3030),
   )
+  discovery_port: int = field(
+    default_factory=lambda: _parse_port('DISCOVERY_PORT', 3000),
+  )
+
+  # LAN address the proxy is reachable on (the per-printer host IP).
+  # Required for CC1 slicer redirection: discovery replies and WS frames
+  # advertise this address as MainboardIP so uploads route through the
+  # proxy instead of going straight to the printer.
+  advertise_ip: str | None = field(default_factory=_parse_advertise_ip)
 
   gcode_dir: str = field(default_factory=lambda: os.getenv('GCODE_DIR', '/data/gcode'))
   retention_days: int = field(

@@ -46,9 +46,10 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     ports:
-      - "192.168.1.102:80:80"      # REST API + HTTP pass-through
-      - "192.168.1.102:3030:3030"  # WebSocket/SDCP control + uploads
-      - "192.168.1.102:8080:8080"  # camera
+      - "192.168.1.102:80:80"          # REST API + HTTP pass-through
+      - "192.168.1.102:3030:3030"      # WebSocket/SDCP control + uploads
+      - "192.168.1.102:3000:3000/udp"  # discovery relay (rewrites MainboardIP)
+      - "192.168.1.102:8080:8080"      # camera
     volumes:
       - ./gcode-archive/cc1:/data/gcode
     env_file:
