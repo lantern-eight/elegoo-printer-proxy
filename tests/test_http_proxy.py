@@ -18,7 +18,7 @@ import pytest
 from src.config import Config
 from src.http_proxy import HTTPProxy, _parse_content_range, _UploadSession
 from src.storage import GCodeStorage
-from tests.conftest import make_gcode
+from tests.conftest import build_cc1_multipart, make_gcode
 
 # ===================================================================
 # Content-Range parsing
@@ -114,9 +114,10 @@ class TestUploadSession:
 
 
 def _make_proxy(
-  tmp_path, *, store_gcode=False, max_body_size=256 * 1024 * 1024
+  tmp_path, *, store_gcode=False, max_body_size=256 * 1024 * 1024, advertise_ip=None
 ) -> HTTPProxy:
   config = Config.__new__(Config)
+  object.__setattr__(config, 'advertise_ip', advertise_ip)
   object.__setattr__(config, 'printer_ip', '192.168.1.100')
   object.__setattr__(config, 'printer_type', 'cc2')
   object.__setattr__(config, 'http_port', 80)
@@ -836,3 +837,139 @@ class TestProxyLifecycle:
     assert len(proxy._sessions) == 0
     assert not storage.temp_path(s1.upload_id).exists()
     assert not storage.temp_path(s2.upload_id).exists()
+
+
+# ===================================================================
+# CC1 SDCP upload on port 80
+# ===================================================================
+
+
+class TestCC1UploadOnPort80:
+  '''ElegooSlicer uploads CC1 gcode via the printer's port-80 endpoint.'''
+
+  @pytest.mark.asyncio
+  async def test_post_uploadfile_intercepted(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._handle_cc1_upload = AsyncMock(return_value=MagicMock())
+    proxy._passthrough = AsyncMock(return_value=MagicMock())
+
+    request = _mock_request('POST', '/uploadFile/upload')
+    await proxy.handle_request(request)
+
+    proxy._handle_cc1_upload.assert_called_once()
+    proxy._passthrough.assert_not_called()
+
+  @pytest.mark.asyncio
+  async def test_get_uploadfile_goes_to_passthrough(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._handle_cc1_upload = AsyncMock(return_value=MagicMock())
+    proxy._passthrough = AsyncMock(return_value=MagicMock())
+
+    request = _mock_request('GET', '/uploadFile/upload')
+    await proxy.handle_request(request)
+
+    proxy._handle_cc1_upload.assert_not_called()
+    proxy._passthrough.assert_called_once()
+
+  @pytest.mark.asyncio
+  async def test_chunk_forwarded_and_archived(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._forward = AsyncMock(return_value=(200, b'{"code": "000000"}', {}))
+
+    data = make_gcode(input_filename_base='cc1_port80')
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-80',
+      offset=0,
+      total_size=len(data),
+      file_data=data,
+      filename='cc1_port80.gcode',
+    )
+    request = _mock_request(
+      'POST',
+      '/uploadFile/upload',
+      headers={'Content-Type': content_type},
+      body=body,
+    )
+
+    response = await proxy.handle_request(request)
+
+    assert response.status == 200
+    proxy._forward.assert_called_once()
+    assert list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
+  async def test_unreachable_printer_returns_502(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._forward = AsyncMock(return_value=(None, None, None))
+
+    data = make_gcode(input_filename_base='unreachable')
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-un', offset=0, total_size=len(data), file_data=data
+    )
+    request = _mock_request(
+      'POST',
+      '/uploadFile/upload',
+      headers={'Content-Type': content_type},
+      body=body,
+    )
+
+    response = await proxy.handle_request(request)
+
+    assert response.status == 502
+    assert not list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
+  async def test_stop_discards_cc1_sessions(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._client = MagicMock()
+    proxy._client.close = AsyncMock()
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+
+    from src.cc1_upload import CC1UploadSession
+
+    session = CC1UploadSession('cc1-uuid', 100, 'md5', storage)
+    session.write_chunk(0, b'X' * 10)
+    proxy._cc1_capture.sessions['cc1-uuid'] = session
+
+    await proxy.stop()
+
+    assert not proxy._cc1_capture.sessions
+    assert not storage.temp_path('cc1_cc1-uuid').exists()
+
+
+# ===================================================================
+# MainboardIP rewrite on port-80 responses
+# ===================================================================
+
+
+class TestMainboardIPRewrite:
+  @pytest.mark.asyncio
+  async def test_response_rewritten_when_advertising(self, tmp_path):
+    proxy = _make_proxy(tmp_path, advertise_ip='192.168.1.200')
+    printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
+    proxy._client = _mock_aiohttp_client(
+      body=printer_payload,
+      headers={'Content-Length': str(len(printer_payload))},
+    )
+
+    status, body, headers = await proxy._forward('GET', '/info', {}, None)
+
+    assert status == 200
+    assert b'192.168.1.200' in body
+    assert b'192.168.1.100' not in body
+    assert 'Content-Length' not in headers
+
+  @pytest.mark.asyncio
+  async def test_response_untouched_without_advertise_ip(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
+    proxy._client = _mock_aiohttp_client(
+      body=printer_payload,
+      headers={'Content-Length': str(len(printer_payload))},
+    )
+
+    status, body, headers = await proxy._forward('GET', '/info', {}, None)
+
+    assert status == 200
+    assert body == printer_payload
+    assert headers.get('Content-Length') == str(len(printer_payload))

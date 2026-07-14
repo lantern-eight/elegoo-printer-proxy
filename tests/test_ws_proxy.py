@@ -13,9 +13,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from aiohttp import web
 
+from src.cc1_upload import CC1UploadSession, parse_multipart_bytes
 from src.config import Config
 from src.storage import GCodeStorage
-from src.ws_proxy import WSProxy, _CC1UploadSession
+from src.ws_proxy import WSProxy
+from tests.conftest import build_cc1_multipart as _build_multipart
 from tests.conftest import make_gcode
 
 # ------------------------------------------------------------------
@@ -33,6 +35,8 @@ def _make_config(tmp_path, **overrides) -> Config:
     'camera_port': 8080,
     'mqtt_ws_port': 9001,
     'ws_port': 3030,
+    'discovery_port': 3000,
+    'advertise_ip': None,
     'gcode_dir': str(tmp_path),
     'retention_days': 90,
     'gcode_timezone': ZoneInfo('UTC'),
@@ -47,48 +51,6 @@ def _make_config(tmp_path, **overrides) -> Config:
   return config
 
 
-def _build_multipart(
-  uuid: str,
-  offset: int,
-  total_size: int,
-  file_data: bytes,
-  filename: str = 'test.gcode',
-  md5: str = 'abc123',
-) -> tuple[bytes, str]:
-  '''Build a CC1-style multipart form body and return (body, content_type).'''
-  boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
-  parts = []
-
-  fields = {
-    'Check': '1',
-    'S-File-MD5': md5,
-    'Offset': str(offset),
-    'Uuid': uuid,
-    'TotalSize': str(total_size),
-  }
-
-  for field_name, field_value in fields.items():
-    parts.append(
-      f'------{boundary}\r\n'
-      f'Content-Disposition: form-data; name="{field_name}"\r\n'
-      f'\r\n'
-      f'{field_value}\r\n'
-    )
-
-  parts.append(
-    f'------{boundary}\r\n'
-    f'Content-Disposition: form-data; name="File"; filename="{filename}"\r\n'
-    f'Content-Type: application/octet-stream\r\n'
-    f'\r\n'
-  )
-  file_part_header = ''.join(parts).encode()
-  file_part_footer = f'\r\n------{boundary}--\r\n'.encode()
-
-  body = file_part_header + file_data + file_part_footer
-  content_type = f'multipart/form-data; boundary=----{boundary}'
-  return body, content_type
-
-
 # ------------------------------------------------------------------
 # CC1 upload session lifecycle
 # ------------------------------------------------------------------
@@ -97,7 +59,7 @@ def _build_multipart(
 class TestCC1UploadSession:
   def test_write_first_chunk(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
-    session = _CC1UploadSession('test-uuid', 100, 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', 100, 'md5hash', storage)
 
     session.write_chunk(0, b'A' * 50)
     assert session.bytes_written == 50
@@ -106,14 +68,14 @@ class TestCC1UploadSession:
   def test_complete_when_all_bytes_written(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     data = make_gcode(input_filename_base='test')
-    session = _CC1UploadSession('test-uuid', len(data), 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', len(data), 'md5hash', storage)
 
     session.write_chunk(0, data)
     assert session.complete
 
   def test_bytes_written_tracks_high_water_mark(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
-    session = _CC1UploadSession('test-uuid', 1000, 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', 1000, 'md5hash', storage)
 
     session.write_chunk(500, b'X' * 100)
     assert session.bytes_written == 600
@@ -124,7 +86,7 @@ class TestCC1UploadSession:
   def test_finalize_saves_and_cleans_temp(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     data = make_gcode(input_filename_base='finalized')
-    session = _CC1UploadSession('test-uuid', len(data), 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', len(data), 'md5hash', storage)
     session.write_chunk(0, data)
 
     json_path, metadata = session.finalize()
@@ -134,7 +96,7 @@ class TestCC1UploadSession:
 
   def test_discard_cleans_temp(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
-    session = _CC1UploadSession('test-uuid', 100, 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', 100, 'md5hash', storage)
     session.write_chunk(0, b'X' * 50)
 
     session.discard()
@@ -147,12 +109,7 @@ class TestCC1UploadSession:
 
 
 class TestMultipartParsing:
-  @pytest.mark.asyncio
-  async def test_parses_cc1_upload_form(self, tmp_path):
-    config = _make_config(tmp_path)
-    storage = GCodeStorage(str(tmp_path), retention_days=90)
-    proxy = WSProxy(config, storage)
-
+  def test_parses_cc1_upload_form(self):
     file_data = b'G28\nG1 X10 Y10\n'
     body, content_type = _build_multipart(
       uuid='abc-123',
@@ -162,7 +119,7 @@ class TestMultipartParsing:
       filename='test.gcode',
     )
 
-    fields = proxy._parse_multipart_bytes(body, content_type)
+    fields = parse_multipart_bytes(body, content_type)
     assert fields is not None
     assert fields['Uuid'] == 'abc-123'
     assert fields['Offset'] == '0'
@@ -170,22 +127,12 @@ class TestMultipartParsing:
     assert fields['file_data'] == file_data
     assert fields['filename'] == 'test.gcode'
 
-  @pytest.mark.asyncio
-  async def test_returns_none_for_non_multipart(self, tmp_path):
-    config = _make_config(tmp_path)
-    storage = GCodeStorage(str(tmp_path), retention_days=90)
-    proxy = WSProxy(config, storage)
-
-    fields = proxy._parse_multipart_bytes(b'plain body', 'application/octet-stream')
+  def test_returns_none_for_non_multipart(self):
+    fields = parse_multipart_bytes(b'plain body', 'application/octet-stream')
     assert fields is None
 
-  @pytest.mark.asyncio
-  async def test_returns_none_for_empty_body(self, tmp_path):
-    config = _make_config(tmp_path)
-    storage = GCodeStorage(str(tmp_path), retention_days=90)
-    proxy = WSProxy(config, storage)
-
-    fields = proxy._parse_multipart_bytes(b'', 'multipart/form-data; boundary=---xyz')
+  def test_returns_none_for_empty_body(self):
+    fields = parse_multipart_bytes(b'', 'multipart/form-data; boundary=---xyz')
     assert fields is None
 
 
@@ -263,11 +210,11 @@ class TestWSProxyStaleCleanup:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
 
-    stale = _CC1UploadSession('stale-uuid', 1000, 'md5', storage)
+    stale = CC1UploadSession('stale-uuid', 1000, 'md5', storage)
     stale.created = time.monotonic() - 600
     proxy._sessions['stale-uuid'] = stale
 
-    fresh = _CC1UploadSession('fresh-uuid', 2000, 'md5', storage)
+    fresh = CC1UploadSession('fresh-uuid', 2000, 'md5', storage)
     proxy._sessions['fresh-uuid'] = fresh
 
     removed = await proxy._cleanup_once()
@@ -282,7 +229,7 @@ class TestWSProxyStaleCleanup:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
 
-    fresh = _CC1UploadSession('fresh-uuid', 1000, 'md5', storage)
+    fresh = CC1UploadSession('fresh-uuid', 1000, 'md5', storage)
     proxy._sessions['fresh-uuid'] = fresh
 
     removed = await proxy._cleanup_once()
@@ -307,8 +254,8 @@ class TestWSProxyLifecycle:
     proxy._runner = MagicMock()
     proxy._runner.cleanup = AsyncMock()
 
-    session_1 = _CC1UploadSession('uuid-1', 100, 'md5', storage)
-    session_2 = _CC1UploadSession('uuid-2', 200, 'md5', storage)
+    session_1 = CC1UploadSession('uuid-1', 100, 'md5', storage)
+    session_2 = CC1UploadSession('uuid-2', 200, 'md5', storage)
     proxy._sessions['uuid-1'] = session_1
     proxy._sessions['uuid-2'] = session_2
 

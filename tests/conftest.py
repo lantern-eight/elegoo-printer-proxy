@@ -99,3 +99,45 @@ def make_gcode(
 
   all_lines = header_lines + body_lines + tail_lines + config_lines
   return '\n'.join(all_lines).encode('utf-8')
+
+
+def build_cc1_multipart(
+  uuid: str,
+  offset: int,
+  total_size: int,
+  file_data: bytes,
+  filename: str = 'test.gcode',
+  md5: str = 'abc123',
+) -> tuple[bytes, str]:
+  '''Build a CC1-style multipart form body and return (body, content_type).'''
+  boundary = '----WebKitFormBoundary111111111aaaaAA'
+  parts = []
+
+  fields = {
+    'Check': '1',
+    'S-File-MD5': md5,
+    'Offset': str(offset),
+    'Uuid': uuid,
+    'TotalSize': str(total_size),
+  }
+
+  for field_name, field_value in fields.items():
+    parts.append(
+      f'------{boundary}\r\n'
+      f'Content-Disposition: form-data; name="{field_name}"\r\n'
+      f'\r\n'
+      f'{field_value}\r\n'
+    )
+
+  parts.append(
+    f'------{boundary}\r\n'
+    f'Content-Disposition: form-data; name="File"; filename="{filename}"\r\n'
+    f'Content-Type: application/octet-stream\r\n'
+    f'\r\n'
+  )
+  file_part_header = ''.join(parts).encode()
+  file_part_footer = f'\r\n------{boundary}--\r\n'.encode()
+
+  body = file_part_header + file_data + file_part_footer
+  content_type = f'multipart/form-data; boundary=----{boundary}'
+  return body, content_type

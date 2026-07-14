@@ -1,7 +1,11 @@
-'''Smart HTTP reverse-proxy that intercepts PUT /upload to capture G-code.
+'''Smart HTTP reverse-proxy on port 80 that captures G-code uploads.
+
+Intercepts both upload protocols seen on this port:
+  • PUT /upload            — CC2 chunked upload (Content-Range + offset response)
+  • POST /uploadFile/upload — CC1 SDCP chunked upload (ElegooSlicer uploads
+    via the printer's port-80 endpoint, not the :3030 one)
 
 Every other request method/path is forwarded transparently to the printer.
-Supports the CC2 chunked-upload protocol (Content-Range + offset response).
 '''
 
 from __future__ import annotations
@@ -17,7 +21,9 @@ from typing import TYPE_CHECKING
 import aiohttp
 from aiohttp import web
 
+from .cc1_upload import CC1UploadCapture
 from .config import Config
+from .discovery_relay import rewrite_mainboard_ip
 from .storage import GCodeStorage
 
 if TYPE_CHECKING:
@@ -131,6 +137,7 @@ class HTTPProxy:
     # Both _save and cleanup_stale_sessions rely on this invariant
     # to avoid deadlocks.
     self._lock = asyncio.Lock()
+    self._cc1_capture = CC1UploadCapture(storage, config.upload_timeout)
     self._client: aiohttp.ClientSession | None = None
 
   async def start(self) -> None:
@@ -146,13 +153,38 @@ class HTTPProxy:
     for session in self._sessions.values():
       await asyncio.to_thread(session.discard)
     self._sessions.clear()
+    await self._cc1_capture.discard_all()
 
   # ---- aiohttp request handler (catch-all) ----
 
   async def handle_request(self, request: web.Request) -> web.Response:
     if request.method == 'PUT' and request.path == '/upload':
       return await self._handle_upload(request)
+    if self._cc1_capture.matches(request):
+      return await self._handle_cc1_upload(request)
     return await self._passthrough(request)
+
+  # ---- CC1 upload interception (SDCP chunked POST on port 80) ----
+
+  async def _handle_cc1_upload(self, request: web.Request) -> web.Response:
+    raw_body = await request.read()
+    return await self._cc1_capture.handle(request, raw_body, self._forward_cc1_chunk)
+
+  async def _forward_cc1_chunk(
+    self,
+    request: web.Request,
+    raw_body: bytes,
+  ) -> web.Response:
+    '''Port-faithful forward of one upload chunk to the printer's port 80.'''
+    status, resp_body, resp_headers = await self._forward(
+      request.method,
+      request.path_qs,
+      request.headers,
+      raw_body,
+    )
+    if status is None:
+      return web.json_response({'error': 'printer_unreachable'}, status=502)
+    return web.Response(status=status, body=resp_body, headers=resp_headers)
 
   # ---- upload interception ----
 
@@ -276,6 +308,12 @@ class HTTPProxy:
 
   async def _passthrough(self, request: web.Request) -> web.Response:
     body = await request.read() if request.can_read_body else None
+    logger.debug(
+      'Passthrough: %s %s (%d bytes in)',
+      request.method,
+      request.path_qs,
+      len(body) if body else 0,
+    )
     status, resp_body, headers = await self._forward(
       request.method,
       request.path_qs,
@@ -321,6 +359,21 @@ class HTTPProxy:
           for header_name, header_value in response.headers.items()
           if header_name.lower() not in _HOP_BY_HOP
         }
+        # Port-80 payloads (device info via the printer web UI) can carry
+        # MainboardIP; the slicer trusts it for follow-up operations, so it
+        # must advertise the proxy. Body size may change — drop the stale
+        # Content-Length and let aiohttp recompute it.
+        if self._config.advertise_ip and resp_body and b'MainboardIP' in resp_body:
+          resp_body = rewrite_mainboard_ip(
+            resp_body,
+            self._config.printer_ip or '',
+            self._config.advertise_ip,
+          )
+          resp_headers = {
+            header_name: header_value
+            for header_name, header_value in resp_headers.items()
+            if header_name.lower() != 'content-length'
+          }
         return response.status, resp_body, resp_headers
     except (TimeoutError, aiohttp.ClientError) as exception:
       logger.error('Printer unreachable: %s', exception)
@@ -348,3 +401,4 @@ class HTTPProxy:
             await asyncio.to_thread(session.discard)
           del self._sessions[session_key]
           logger.warning('Discarded stale upload session (key=%r)', session_key)
+      await self._cc1_capture.cleanup_once()
