@@ -64,11 +64,15 @@ must be proxied for full functionality.
 |------|----------|----------|
 | 3030 | WS + HTTP | Relays the SDCP WebSocket (status, controls) and intercepts multipart `POST /uploadFile/upload` chunks. Rewrites `MainboardIP` in relayed frames to the proxy's own address. |
 | 3000/udp | SDCP discovery | Forwards discovery probes to the printer and rewrites `MainboardIP` in the reply, so the slicer routes uploads through the proxy. Requires `ADVERTISE_IP`. |
-| 80   | HTTP     | Serves the REST API (`/api/*`), passes everything else through to the printer. |
+| 80   | HTTP     | Intercepts multipart `POST /uploadFile/upload` chunks. Also serves the REST API (`/api/*`), rewrites `MainboardIP` in passed-through responses, and forwards everything else to the printer. |
 | 8080 | MJPEG    | Transparent TCP pass-through. Closed on CC1 firmware V1.4.46 — kept for older/future firmware, harmless when unused. |
 
-The CC1 uploads G-code as multipart form POSTs in 1 MB chunks over port 3030 — the
-same port as its control WebSocket — so a single smart service handles both.
+The CC1 firmware serves its upload endpoint on **both** port 3030 (SDCP) and
+port 80 (its web UI port). ElegooSlicer uploads on port 80: it builds the
+upload URL from the device's address with no explicit port, so HTTP's default
+wins (confirmed in Elegoo's open-source `elegoo-link` adapter). The proxy
+intercepts `POST /uploadFile/upload` on both listeners with one shared capture,
+so uploads are archived whichever port a client picks.
 
 **Why the `MainboardIP` rewrite matters:** the slicer takes the printer's
 address from SDCP payloads (discovery replies, status frames) rather than the
@@ -99,7 +103,8 @@ single-shot uploads to disk to avoid OOM on resource-constrained hosts.
 Chunked as well, but as multipart form POSTs: each 1 MB chunk carries the upload's
 UUID, byte offset, total size, and MD5. The proxy reassembles chunks by UUID,
 forwards each request to the printer verbatim, and archives the file once the
-printer confirms the final chunk.
+printer confirms the final chunk. ElegooSlicer sends these POSTs to port 80;
+the printer also accepts them on port 3030, and the proxy captures on both.
 
 ## One IP per printer
 
@@ -287,10 +292,18 @@ exposed to the internet.
 
 - **CC2**: In the printer settings, change the printer IP from the CC2's real
   address to the CC2 proxy's IP. Controls, camera, and file list work normally.
-- **CC1**: Add the printer by IP, using the CC1 proxy's IP instead of the real
-  printer address. The slicer connects over SDCP (port 3030) through the proxy.
-  (The proxy does not answer discovery broadcasts, so auto-discovery finds the
-  real printer — add by IP instead.)
+- **CC1**: Add the printer **manually by IP**. The slicer connects over SDCP (port
+  3030) through the proxy, and controls, file list, camera, and uploads all go
+  through it.
+
+  **Do not use auto-discovery for a proxied CC1.** Discovery broadcasts reach
+  the printer directly (the proxy never sees them), so the slicer records the
+  printer's real address — and editing the IP on an auto-discovered entry does
+  not stick: the entry is keyed by mainboard ID, and the slicer's periodic
+  broadcast re-scan restores the real address within seconds. Uploads then
+  bypass the proxy and are not captured. A manually added entry keeps the proxy
+  IP permanently. If you already added the printer via auto-discovery, delete
+  the entry and re-add it manually by IP.
 
 ## REST API
 
