@@ -7,7 +7,7 @@ upload time. Supports any mix of **CC1** (Centauri Carbon) and **CC2**
 
 ## Why?
 
-Printers's Canvas (AMS) systems report only a *total* filament usage value to network
+Printers' Canvas (AMS) systems report only a *total* filament usage value to network
 clients. The **per-slot breakdown** (how much each spool contributed) exists only inside
 the G-code file, and printers don't expose a way to retrieve a file after it's been
 sent.
@@ -145,7 +145,7 @@ cp .env.example .env.cc2   # set PRINTER_IP=<real CC2 IP>, PRINTER_TYPE=cc2
 cp .env.example .env.cc1   # set PRINTER_IP=<real CC1 IP>, PRINTER_TYPE=cc1
 
 # 4. Give the host the proxy IPs (persistent across reboots)
-sudo ./scripts/setup_macos_ips.sh          # macOS — reads IPs from docker-compose.yaml
+sudo ./scripts/setup_macos_ips.sh          # macOS — reads IPs from docker-compose.yml
 # macOS also needs a one-time Docker Desktop setting — see
 #   "macOS: enable privileged port mapping" below
 # Linux equivalent: sudo ip addr add <proxy-ip>/24 dev eth0
