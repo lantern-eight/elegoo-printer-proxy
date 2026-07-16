@@ -160,7 +160,7 @@ class WSProxy:
 
   async def _passthrough(self, request: web.Request) -> web.Response:
     body = await request.read() if request.can_read_body else None
-    logger.info(
+    logger.debug(
       'Passthrough: %s %s (%d bytes in)',
       request.method,
       request.path_qs,
