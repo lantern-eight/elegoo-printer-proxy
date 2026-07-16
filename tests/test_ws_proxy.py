@@ -212,16 +212,16 @@ class TestWSProxyStaleCleanup:
 
     stale = CC1UploadSession('stale-uuid', 1000, 'md5', storage)
     stale.created = time.monotonic() - 600
-    proxy._sessions['stale-uuid'] = stale
+    proxy._capture.sessions['stale-uuid'] = stale
 
     fresh = CC1UploadSession('fresh-uuid', 2000, 'md5', storage)
-    proxy._sessions['fresh-uuid'] = fresh
+    proxy._capture.sessions['fresh-uuid'] = fresh
 
-    removed = await proxy._cleanup_once()
+    removed = await proxy._capture.cleanup_once()
 
     assert removed == 1
-    assert 'stale-uuid' not in proxy._sessions
-    assert 'fresh-uuid' in proxy._sessions
+    assert 'stale-uuid' not in proxy._capture.sessions
+    assert 'fresh-uuid' in proxy._capture.sessions
 
   @pytest.mark.asyncio
   async def test_fresh_sessions_survive(self, tmp_path):
@@ -230,12 +230,12 @@ class TestWSProxyStaleCleanup:
     proxy = WSProxy(config, storage)
 
     fresh = CC1UploadSession('fresh-uuid', 1000, 'md5', storage)
-    proxy._sessions['fresh-uuid'] = fresh
+    proxy._capture.sessions['fresh-uuid'] = fresh
 
-    removed = await proxy._cleanup_once()
+    removed = await proxy._capture.cleanup_once()
 
     assert removed == 0
-    assert 'fresh-uuid' in proxy._sessions
+    assert 'fresh-uuid' in proxy._capture.sessions
 
 
 # ------------------------------------------------------------------
@@ -256,11 +256,11 @@ class TestWSProxyLifecycle:
 
     session_1 = CC1UploadSession('uuid-1', 100, 'md5', storage)
     session_2 = CC1UploadSession('uuid-2', 200, 'md5', storage)
-    proxy._sessions['uuid-1'] = session_1
-    proxy._sessions['uuid-2'] = session_2
+    proxy._capture.sessions['uuid-1'] = session_1
+    proxy._capture.sessions['uuid-2'] = session_2
 
     await proxy.stop()
 
-    assert len(proxy._sessions) == 0
+    assert len(proxy._capture.sessions) == 0
     assert not storage.temp_path('cc1_uuid-1').exists()
     assert not storage.temp_path('cc1_uuid-2').exists()

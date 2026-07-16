@@ -21,7 +21,6 @@ from .http_proxy import HOP_BY_HOP
 from .storage import GCodeStorage
 
 if TYPE_CHECKING:
-  from .cc1_upload import CC1UploadSession
   from .config import Config
 
 logger = logging.getLogger(__name__)
@@ -41,10 +40,6 @@ class WSProxy:
     self._capture = CC1UploadCapture(storage, config.upload_timeout)
     self._client: aiohttp.ClientSession | None = None
     self._runner: web.AppRunner | None = None
-
-  @property
-  def _sessions(self) -> dict[str, CC1UploadSession]:
-    return self._capture.sessions
 
   async def start(self) -> None:
     timeout = aiohttp.ClientTimeout(total=self._config.upload_timeout)
@@ -232,12 +227,8 @@ class WSProxy:
 
   # ---- stale session reaper ----
 
-  async def _cleanup_once(self) -> int:
-    '''Single pass: discard uploads older than upload_timeout. Returns count.'''
-    return await self._capture.cleanup_once()
-
   async def cleanup_stale_sessions(self) -> None:
     '''Periodically discard uploads that never completed.'''
     while True:
       await asyncio.sleep(60)
-      await self._cleanup_once()
+      await self._capture.cleanup_once()
