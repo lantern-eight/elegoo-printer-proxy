@@ -176,6 +176,10 @@ class CC1UploadCapture:
     except (ValueError, TypeError):
       logger.warning('CC1 upload: invalid Offset/TotalSize, forwarding raw')
       return await forward(request, raw_body)
+    if not upload_uuid or total_size <= 0:
+      logger.warning('CC1 upload: missing Uuid or TotalSize, forwarding raw')
+      return await forward(request, raw_body)
+
     file_md5 = fields.get('S-File-MD5', '')
     file_data = fields.get('file_data', b'')
     filename = fields.get('filename')

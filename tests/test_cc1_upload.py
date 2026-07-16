@@ -162,6 +162,39 @@ class TestCaptureHandle:
     assert list(tmp_path.rglob('*.json'))
 
   @pytest.mark.asyncio
+  async def test_missing_total_size_forwarded_raw(self, tmp_path):
+    '''TotalSize=0 (or missing) must not create a capture session.'''
+    capture = _capture(tmp_path)
+    forward = _ForwardStub()
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-zero', offset=0, total_size=0, file_data=b'junk'
+    )
+
+    response = await capture.handle(_request(content_type), body, forward)
+
+    assert response.status == 200
+    assert forward.calls == [body]
+    assert not capture.sessions
+    assert not list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
+  async def test_empty_uuid_forwarded_raw(self, tmp_path):
+    '''Empty Uuid must not create a capture session.'''
+    capture = _capture(tmp_path)
+    forward = _ForwardStub()
+    data = make_gcode(input_filename_base='no_uuid')
+    body, content_type = build_cc1_multipart(
+      uuid='', offset=0, total_size=len(data), file_data=data
+    )
+
+    response = await capture.handle(_request(content_type), body, forward)
+
+    assert response.status == 200
+    assert forward.calls == [body]
+    assert not capture.sessions
+    assert not list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
   async def test_non_multipart_forwarded_raw(self, tmp_path):
     capture = _capture(tmp_path)
     forward = _ForwardStub()
