@@ -44,7 +44,7 @@ class API:
 
   async def _handle_health(self, _request: web.Request) -> web.Response:
     response = {'status': 'ok'}
-    if self._config:
+    if self._config and self._config.printer_ip:
       response['printer_ip'] = self._config.printer_ip
     if self._printer_type:
       response['printer_type'] = self._printer_type
