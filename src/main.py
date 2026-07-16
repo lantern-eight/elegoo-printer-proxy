@@ -57,8 +57,20 @@ async def _run() -> None:
   if printer_type == 'auto':
     from .detect import detect_printer_type
 
-    printer_type = await detect_printer_type(config.printer_ip)
-    logger.info('Auto-detected printer type: %s', printer_type)
+    delays = [5, 10, 20]
+    for attempt, delay in enumerate(delays, 1):
+      try:
+        printer_type = await detect_printer_type(config.printer_ip)
+        logger.info('Auto-detected printer type: %s', printer_type)
+        break
+      except RuntimeError:
+        logger.warning(
+          'Auto-detect attempt %d/%d failed, retrying in %ds…',
+          attempt, len(delays), delay,
+        )
+        await asyncio.sleep(delay)
+    else:
+      printer_type = await detect_printer_type(config.printer_ip)
 
   logger.info('Elegoo Printer Proxy starting')
   logger.info('  Printer IP   : %s', config.printer_ip)
