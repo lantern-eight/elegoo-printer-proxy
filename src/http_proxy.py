@@ -16,7 +16,6 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import aiohttp
 from aiohttp import web
@@ -25,9 +24,7 @@ from .cc1_upload import CC1UploadCapture
 from .config import Config
 from .discovery_relay import rewrite_mainboard_ip
 from .storage import GCodeStorage
-
-if TYPE_CHECKING:
-  from .gcode_parser import GCodeMetadata
+from .upload_session import BaseUploadSession
 
 logger = logging.getLogger(__name__)
 
@@ -51,55 +48,29 @@ HOP_BY_HOP = frozenset(
 # ------------------------------------------------------------------
 
 
-class _UploadSession:
+class _UploadSession(BaseUploadSession):
   '''Accumulates chunks for a single multi-PUT upload.'''
 
   def __init__(self, total_size: int, storage: GCodeStorage) -> None:
-    self.total_size = total_size
-    self.upload_id = f'{total_size}_{uuid.uuid4().hex[:12]}'
-    self.bytes_written = 0
-    self.created = time.monotonic()
-    self.lock = asyncio.Lock()
-    self._path = storage.temp_path(self.upload_id)
-    self._storage = storage
-    self._fh = None
-
-  def _close_and_cleanup(self) -> None:
-    '''Shared close logic for finalize/discard.'''
-    if self._fh is not None:
-      self._fh.close()
-      self._fh = None
+    upload_id = f'{total_size}_{uuid.uuid4().hex[:12]}'
+    super().__init__(total_size, upload_id, storage)
+    self.upload_id = upload_id
 
   def write_chunk(self, offset: int, data: bytes | Path) -> None:
     '''Append *data* at *offset*. *data* may be raw bytes or a Path to stream from.'''
-    if self._fh is None:
-      self._fh = open(self._path, 'wb')  # noqa: SIM115
-    self._fh.seek(offset)
     if isinstance(data, Path):
+      if self._fh is None:
+        self._fh = open(self._path, 'wb')  # noqa: SIM115
+      self._fh.seek(offset)
       written = 0
       with open(data, 'rb') as source:
         while block := source.read(_STREAM_CHUNK_SIZE):
           self._fh.write(block)
           written += len(block)
-      data_length = written
+      self._fh.flush()
+      self.bytes_written = max(self.bytes_written, offset + written)
     else:
-      self._fh.write(data)
-      data_length = len(data)
-    self._fh.flush()
-    self.bytes_written = max(self.bytes_written, offset + data_length)
-
-  @property
-  def complete(self) -> bool:
-    return self.bytes_written >= self.total_size
-
-  def finalize(self, filename_hint: str | None = None) -> tuple[Path, GCodeMetadata]:
-    '''Close, persist to the archive, clean up temp.  Returns *(path, meta)*.'''
-    self._close_and_cleanup()
-    return self._storage.save_gcode_file(self._path, filename_hint=filename_hint)
-
-  def discard(self) -> None:
-    self._close_and_cleanup()
-    self._storage.cleanup_temp(self.upload_id)
+      super().write_chunk(offset, data)
 
 
 # ------------------------------------------------------------------

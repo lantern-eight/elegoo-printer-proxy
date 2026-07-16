@@ -21,9 +21,10 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from .upload_session import BaseUploadSession
+
 if TYPE_CHECKING:
   from collections.abc import Awaitable, Callable
-  from pathlib import Path
 
   from .storage import GCodeStorage
 
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 UPLOAD_PATH = '/uploadFile/upload'
 
 
-class CC1UploadSession:
+class CC1UploadSession(BaseUploadSession):
   '''Accumulates multipart chunks for a single CC1 gcode upload.'''
 
   def __init__(
@@ -45,42 +46,9 @@ class CC1UploadSession:
     storage: GCodeStorage,
   ) -> None:
     safe_uuid = re.sub(r'[^a-zA-Z0-9\-]', '', uuid)
+    super().__init__(total_size, f'cc1_{safe_uuid}', storage)
     self.uuid = uuid
-    self.total_size = total_size
     self.md5 = md5
-    self.bytes_written = 0
-    self.created = time.monotonic()
-    self.lock = asyncio.Lock()
-    self._temp_key = f'cc1_{safe_uuid}'
-    self._path = storage.temp_path(self._temp_key)
-    self._storage = storage
-    self._fh = None
-
-  def write_chunk(self, offset: int, data: bytes) -> None:
-    if self._fh is None:
-      self._fh = open(self._path, 'wb')  # noqa: SIM115
-    self._fh.seek(offset)
-    self._fh.write(data)
-    self._fh.flush()
-    # High-water mark; assumes CC1 sends chunks sequentially (no gaps).
-    self.bytes_written = max(self.bytes_written, offset + len(data))
-
-  @property
-  def complete(self) -> bool:
-    return self.bytes_written >= self.total_size
-
-  def _close(self) -> None:
-    if self._fh is not None:
-      self._fh.close()
-      self._fh = None
-
-  def finalize(self, filename_hint: str | None = None) -> tuple[Path, dict]:
-    self._close()
-    return self._storage.save_gcode_file(self._path, filename_hint=filename_hint)
-
-  def discard(self) -> None:
-    self._close()
-    self._storage.cleanup_temp(self._temp_key)
 
 
 def parse_multipart_bytes(raw_body: bytes, content_type: str) -> dict | None:
