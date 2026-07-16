@@ -71,8 +71,10 @@ The CC1 firmware serves its upload endpoint on **both** port 3030 (SDCP) and
 port 80 (its web UI port). ElegooSlicer uploads on port 80: it builds the
 upload URL from the device's address with no explicit port, so HTTP's default
 wins (confirmed in Elegoo's open-source `elegoo-link` adapter). The proxy
-intercepts `POST /uploadFile/upload` on both listeners with one shared capture,
-so uploads are archived whichever port a client picks.
+intercepts `POST /uploadFile/upload` on both listeners (each with its own
+capture instance), so uploads are archived whichever port a client picks.
+The slicer sends all chunks for a given upload on the same port, so the
+per-listener instances do not need to share state.
 
 **Why the `MainboardIP` rewrite matters:** the slicer takes the printer's
 address from SDCP payloads (discovery replies, status frames) rather than the
