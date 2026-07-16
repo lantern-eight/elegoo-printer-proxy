@@ -38,7 +38,7 @@ if [[ ! -f ${compose_file} ]]; then
 fi
 
 # 1. Collect unique host IPs from compose port bindings ("IP:host:container").
-proxy_ips=$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+:[0-9]+"' "${compose_file}" \
+proxy_ips=$(grep -Eo '"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+:[0-9]+(/[a-z]+)?"' "${compose_file}" \
   | cut -d '"' -f 2 | cut -d ':' -f 1 | sort -u)
 
 if [[ -z ${proxy_ips} ]]; then
