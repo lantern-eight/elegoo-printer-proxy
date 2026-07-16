@@ -17,6 +17,7 @@ from aiohttp import web
 
 from .cc1_upload import CC1UploadCapture
 from .discovery_relay import rewrite_mainboard_ip
+from .http_proxy import HOP_BY_HOP
 from .storage import GCodeStorage
 
 if TYPE_CHECKING:
@@ -173,7 +174,7 @@ class WSProxy:
         headers={
           header_name: header_value
           for header_name, header_value in request.headers.items()
-          if header_name.lower() not in ('host', 'connection', 'transfer-encoding')
+          if header_name.lower() not in HOP_BY_HOP and header_name.lower() != 'host'
         },
         data=body,
       ) as response:
@@ -215,7 +216,7 @@ class WSProxy:
         headers={
           header_name: header_value
           for header_name, header_value in request.headers.items()
-          if header_name.lower() not in ('host', 'connection', 'transfer-encoding')
+          if header_name.lower() not in HOP_BY_HOP and header_name.lower() != 'host'
         },
         data=raw_body,
       ) as response:

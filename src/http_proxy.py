@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Headers that must not be forwarded between hops.
-_HOP_BY_HOP = frozenset(
+HOP_BY_HOP = frozenset(
   {
     'connection',
     'keep-alive',
@@ -339,7 +339,7 @@ class HTTPProxy:
     forwarded_headers = {
       header_name: header_value
       for header_name, header_value in headers.items()
-      if header_name.lower() not in _HOP_BY_HOP and header_name.lower() != 'host'
+      if header_name.lower() not in HOP_BY_HOP and header_name.lower() != 'host'
     }
     forwarded_headers['Host'] = self._config.printer_ip
 
@@ -357,7 +357,7 @@ class HTTPProxy:
         resp_headers = {
           header_name: header_value
           for header_name, header_value in response.headers.items()
-          if header_name.lower() not in _HOP_BY_HOP
+          if header_name.lower() not in HOP_BY_HOP
         }
         # Port-80 payloads (device info via the printer web UI) can carry
         # MainboardIP; the slicer trusts it for follow-up operations, so it
