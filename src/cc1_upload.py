@@ -89,8 +89,8 @@ def parse_multipart_bytes(raw_body: bytes, content_type: str) -> dict | None:
     boundary = None
     for segment in content_type.split(';'):
       segment = segment.strip()
-      if segment.startswith('boundary='):
-        boundary = segment[len('boundary=') :]
+      if segment.lower().startswith('boundary='):
+        boundary = segment[len('boundary=') :].strip('"')
         break
 
     if not boundary:

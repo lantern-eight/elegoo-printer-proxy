@@ -195,6 +195,39 @@ class TestCaptureHandle:
     assert not list(tmp_path.rglob('*.json'))
 
   @pytest.mark.asyncio
+  async def test_quoted_boundary_parsed(self, tmp_path):
+    '''RFC 2046 allows boundary="value"; quotes must be stripped.'''
+    capture = _capture(tmp_path)
+    forward = _ForwardStub()
+    data = make_gcode(input_filename_base='quoted')
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-q', offset=0, total_size=len(data), file_data=data
+    )
+    # Wrap the boundary value in quotes
+    content_type = content_type.replace('boundary=', 'boundary="') + '"'
+
+    await capture.handle(_request(content_type), body, forward)
+
+    assert not capture.sessions
+    assert list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
+  async def test_uppercase_boundary_param_parsed(self, tmp_path):
+    '''RFC 2045: parameter names are case-insensitive.'''
+    capture = _capture(tmp_path)
+    forward = _ForwardStub()
+    data = make_gcode(input_filename_base='upper')
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-u', offset=0, total_size=len(data), file_data=data
+    )
+    content_type = content_type.replace('boundary=', 'Boundary=')
+
+    await capture.handle(_request(content_type), body, forward)
+
+    assert not capture.sessions
+    assert list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
   async def test_non_multipart_forwarded_raw(self, tmp_path):
     capture = _capture(tmp_path)
     forward = _ForwardStub()
