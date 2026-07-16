@@ -199,6 +199,69 @@ class TestWSProxyRouting:
 
 
 # ------------------------------------------------------------------
+# MainboardIP rewrite on port-3030 passthrough responses
+# ------------------------------------------------------------------
+
+
+def _mock_aiohttp_client(status=200, body=b'ok', headers=None):
+  cm = MagicMock()
+  response = MagicMock()
+  response.status = status
+  response.read = AsyncMock(return_value=body)
+  response.headers = headers or {}
+  cm.__aenter__ = AsyncMock(return_value=response)
+  cm.__aexit__ = AsyncMock(return_value=False)
+  client = MagicMock()
+  client.request = MagicMock(return_value=cm)
+  return client
+
+
+class TestPassthroughMainboardIPRewrite:
+  @pytest.mark.asyncio
+  async def test_response_rewritten_when_advertising(self, tmp_path):
+    config = _make_config(tmp_path, advertise_ip='192.168.1.200')
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    proxy = WSProxy(config, storage)
+    printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
+    proxy._client = _mock_aiohttp_client(body=printer_payload)
+
+    request = MagicMock()
+    request.method = 'GET'
+    request.path_qs = '/info'
+    request.headers = MagicMock()
+    request.headers.items.return_value = []
+    request.can_read_body = False
+    request.read = AsyncMock(return_value=b'')
+
+    response = await proxy._passthrough(request)
+
+    assert response.status == 200
+    assert b'192.168.1.200' in response.body
+    assert b'192.168.1.100' not in response.body
+
+  @pytest.mark.asyncio
+  async def test_response_untouched_without_advertise_ip(self, tmp_path):
+    config = _make_config(tmp_path)
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    proxy = WSProxy(config, storage)
+    printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
+    proxy._client = _mock_aiohttp_client(body=printer_payload)
+
+    request = MagicMock()
+    request.method = 'GET'
+    request.path_qs = '/info'
+    request.headers = MagicMock()
+    request.headers.items.return_value = []
+    request.can_read_body = False
+    request.read = AsyncMock(return_value=b'')
+
+    response = await proxy._passthrough(request)
+
+    assert response.status == 200
+    assert response.body == printer_payload
+
+
+# ------------------------------------------------------------------
 # Stale session cleanup
 # ------------------------------------------------------------------
 
