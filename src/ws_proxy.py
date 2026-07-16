@@ -17,7 +17,7 @@ from aiohttp import web
 
 from .cc1_upload import CC1UploadCapture
 from .discovery_relay import rewrite_mainboard_ip
-from .http_proxy import HOP_BY_HOP
+from .http_proxy import forward_to_printer
 from .storage import GCodeStorage
 
 if TYPE_CHECKING:
@@ -162,41 +162,18 @@ class WSProxy:
       request.path_qs,
       len(body) if body else 0,
     )
-    try:
-      async with self._client.request(
-        request.method,
-        f'{self._printer_http_url}{request.path_qs}',
-        headers={
-          header_name: header_value
-          for header_name, header_value in request.headers.items()
-          if header_name.lower() not in HOP_BY_HOP and header_name.lower() != 'host'
-        },
-        data=body,
-      ) as response:
-        response_body = await response.read()
-        # Device-info style responses carry MainboardIP; the slicer uses it
-        # for follow-up operations, so it must advertise the proxy. The
-        # body length may change — Content-Length is recomputed by aiohttp.
-        if self._config.advertise_ip and b'MainboardIP' in response_body:
-          response_body = rewrite_mainboard_ip(
-            response_body,
-            self._config.printer_ip or '',
-            self._config.advertise_ip,
-          )
-        response_headers = {
-          header_name: header_value
-          for header_name, header_value in response.headers.items()
-          if header_name.lower()
-          not in ('connection', 'transfer-encoding', 'content-length')
-        }
-        return web.Response(
-          status=response.status,
-          body=response_body,
-          headers=response_headers,
-        )
-    except (TimeoutError, aiohttp.ClientError) as exception:
-      logger.error('Printer unreachable at %s: %s', self._printer_http_url, exception)
+    status, resp_body, resp_headers = await forward_to_printer(
+      self._client,
+      self._printer_http_url,
+      request.method,
+      request.path_qs,
+      request.headers,
+      body,
+      config=self._config,
+    )
+    if status is None:
       return web.json_response({'error': 'printer_unreachable'}, status=502)
+    return web.Response(status=status, body=resp_body, headers=resp_headers)
 
   async def _forward_raw(
     self,
@@ -204,26 +181,21 @@ class WSProxy:
     raw_body: bytes,
   ) -> web.Response:
     '''Forward raw bytes to the printer, preserving content-type.'''
-    try:
-      async with self._client.request(
-        request.method,
-        f'{self._printer_http_url}{request.path_qs}',
-        headers={
-          header_name: header_value
-          for header_name, header_value in request.headers.items()
-          if header_name.lower() not in HOP_BY_HOP and header_name.lower() != 'host'
-        },
-        data=raw_body,
-      ) as response:
-        response_body = await response.read()
-        return web.Response(
-          status=response.status,
-          body=response_body,
-          content_type=response.content_type,
-        )
-    except (TimeoutError, aiohttp.ClientError) as exception:
-      logger.error('Printer unreachable at %s: %s', self._printer_http_url, exception)
+    status, resp_body, resp_headers = await forward_to_printer(
+      self._client,
+      self._printer_http_url,
+      request.method,
+      request.path_qs,
+      request.headers,
+      raw_body,
+    )
+    if status is None:
       return web.json_response({'error': 'printer_unreachable'}, status=502)
+    return web.Response(
+      status=status,
+      body=resp_body,
+      content_type=resp_headers.get('Content-Type', 'application/octet-stream'),
+    )
 
   # ---- stale session reaper ----
 

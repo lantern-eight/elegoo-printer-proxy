@@ -44,6 +44,62 @@ HOP_BY_HOP = frozenset(
 
 
 # ------------------------------------------------------------------
+# Shared proxy helper
+# ------------------------------------------------------------------
+
+
+async def forward_to_printer(
+  client: aiohttp.ClientSession,
+  printer_url: str,
+  method: str,
+  path_qs: str,
+  headers,
+  body=None,
+  *,
+  config: Config | None = None,
+  extra_headers: dict[str, str] | None = None,
+) -> tuple[int | None, bytes | None, dict | None]:
+  '''Forward a request to the printer, returning *(status, body, headers)*.
+
+  Filters hop-by-hop and Host headers from the request, optionally rewrites
+  MainboardIP in the response (when *config.advertise_ip* is set), and
+  strips Content-Length so aiohttp recomputes it from the body.
+
+  Returns *(None, None, None)* when the printer is unreachable.
+  '''
+  fwd_headers = {
+    k: v
+    for k, v in headers.items()
+    if k.lower() not in HOP_BY_HOP and k.lower() != 'host'
+  }
+  if extra_headers:
+    fwd_headers.update(extra_headers)
+  try:
+    async with client.request(
+      method,
+      f'{printer_url}{path_qs}',
+      headers=fwd_headers,
+      data=body,
+    ) as response:
+      resp_body = await response.read()
+      resp_headers = {
+        k: v
+        for k, v in response.headers.items()
+        if k.lower() not in HOP_BY_HOP and k.lower() != 'content-length'
+      }
+      if config and config.advertise_ip and resp_body and b'MainboardIP' in resp_body:
+        resp_body = rewrite_mainboard_ip(
+          resp_body,
+          config.printer_ip or '',
+          config.advertise_ip,
+        )
+      return response.status, resp_body, resp_headers
+  except (TimeoutError, aiohttp.ClientError) as exc:
+    logger.error('Printer unreachable at %s: %s', printer_url, exc)
+    return None, None, None
+
+
+# ------------------------------------------------------------------
 # Chunked-upload session tracker
 # ------------------------------------------------------------------
 
@@ -307,48 +363,22 @@ class HTTPProxy:
     headers: dict,
     body: bytes | Path | None,
   ) -> tuple[int | None, bytes | None, dict | None]:
-    forwarded_headers = {
-      header_name: header_value
-      for header_name, header_value in headers.items()
-      if header_name.lower() not in HOP_BY_HOP and header_name.lower() != 'host'
-    }
-    forwarded_headers['Host'] = self._config.printer_ip
-
     file_handle = None
     try:
+      data = body
       if isinstance(body, Path):
         file_handle = body.open('rb')  # noqa: SIM115
-      async with self._client.request(
+        data = file_handle
+      return await forward_to_printer(
+        self._client,
+        self._printer,
         method,
-        f'{self._printer}{path_qs}',
-        headers=forwarded_headers,
-        data=file_handle if file_handle is not None else body,
-      ) as response:
-        resp_body = await response.read()
-        resp_headers = {
-          header_name: header_value
-          for header_name, header_value in response.headers.items()
-          if header_name.lower() not in HOP_BY_HOP
-        }
-        # Port-80 payloads (device info via the printer web UI) can carry
-        # MainboardIP; the slicer trusts it for follow-up operations, so it
-        # must advertise the proxy. Body size may change — drop the stale
-        # Content-Length and let aiohttp recompute it.
-        if self._config.advertise_ip and resp_body and b'MainboardIP' in resp_body:
-          resp_body = rewrite_mainboard_ip(
-            resp_body,
-            self._config.printer_ip or '',
-            self._config.advertise_ip,
-          )
-          resp_headers = {
-            header_name: header_value
-            for header_name, header_value in resp_headers.items()
-            if header_name.lower() != 'content-length'
-          }
-        return response.status, resp_body, resp_headers
-    except (TimeoutError, aiohttp.ClientError) as exception:
-      logger.error('Printer unreachable: %s', exception)
-      return None, None, None
+        path_qs,
+        headers,
+        data,
+        config=self._config,
+        extra_headers={'Host': self._config.printer_ip},
+      )
     finally:
       if file_handle is not None:
         file_handle.close()

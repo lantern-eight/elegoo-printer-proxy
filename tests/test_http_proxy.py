@@ -972,4 +972,4 @@ class TestMainboardIPRewrite:
 
     assert status == 200
     assert body == printer_payload
-    assert headers.get('Content-Length') == str(len(printer_payload))
+    assert 'Content-Length' not in headers
