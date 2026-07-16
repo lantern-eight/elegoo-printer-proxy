@@ -249,6 +249,24 @@ class TestCaptureHandle:
 
     assert capture.sessions['uuid-6'] is not first_session
 
+  @pytest.mark.asyncio
+  async def test_mid_upload_chunk_without_session_skips_capture(self, tmp_path):
+    '''A chunk at offset > 0 with no session (e.g. proxy restart) must not
+    create a corrupt archive with a zero-filled head.'''
+    capture = _capture(tmp_path)
+    forward = _ForwardStub()
+    data = make_gcode(input_filename_base='orphan')
+
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-orphan', offset=512, total_size=len(data), file_data=data
+    )
+    response = await capture.handle(_request(content_type), body, forward)
+
+    assert response.status == 200
+    assert forward.calls == [body]
+    assert not capture.sessions
+    assert not list(tmp_path.rglob('*.json'))
+
 
 # ------------------------------------------------------------------
 # Stale session cleanup

@@ -234,6 +234,12 @@ class CC1UploadCapture:
     # This avoids holding the global lock during the blocking write.
     async with self._lock:
       session = self._sessions.get(upload_uuid)
+      if session is None and offset != 0:
+        logger.warning(
+          'CC1 upload: chunk at offset %d with no session (proxy restart?), skipping capture',
+          offset,
+        )
+        return
       if session is None or offset == 0:
         if session is not None:
           async with session.lock:
