@@ -253,9 +253,10 @@ class HTTPProxy:
 
     return temp_path
 
-  def _session_key(self, total: int, headers) -> tuple[str | None, int]:
+  @staticmethod
+  def _session_key(total: int, filename_hint: str | None) -> tuple[str | None, int]:
     '''Session key: (filename, total) when X-File-Name present, else (None, total).'''
-    return (self._filename_hint(headers), total)
+    return (filename_hint, total)
 
   @staticmethod
   def _filename_hint(headers) -> str | None:
@@ -281,7 +282,7 @@ class HTTPProxy:
         return
 
       start, end, total = content_range
-      session_key = self._session_key(total, headers)
+      session_key = self._session_key(total, filename_hint)
       logger.info(
         'Upload chunk: bytes %d–%d/%d (%.1f%%)',
         start,
