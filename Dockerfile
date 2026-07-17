@@ -1,4 +1,4 @@
-# Base image: minimal Python 3.12 runtime
+# Base image: minimal Python runtime
 FROM python:3.14-slim
 
 # Copy uv (fast Python package manager) from official image into /bin
@@ -20,8 +20,8 @@ COPY src/ src/
 # see docker-compose.yml cap_add for the standard deployment.
 RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
 
-# HTTP proxy, MQTT TCP, camera stream, MQTT WebSocket
-EXPOSE 80 1883 8080 9001
+# HTTP proxy, MQTT TCP, WebSocket/SDCP, camera stream, MQTT WebSocket
+EXPOSE 80 1883 3030 8080 9001 3000/udp
 
 USER appuser
 

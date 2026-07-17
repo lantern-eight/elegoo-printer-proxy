@@ -176,6 +176,9 @@ cython_debug/
 # G-code archive (runtime data, not source)
 gcode-archive/
 
+# Docker Compose (contains deployment-specific IPs and network config)
+docker-compose.yml
+
 # Cursor  
 #  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
@@ -183,3 +186,5 @@ gcode-archive/
 .cursorignore
 .cursorindexingignore
 .DS_Store
+.env.*
+!.env.example

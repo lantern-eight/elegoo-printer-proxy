@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from src.config import Config
 from src.storage import GCodeStorage
 
 
@@ -99,3 +101,94 @@ def make_gcode(
 
   all_lines = header_lines + body_lines + tail_lines + config_lines
   return '\n'.join(all_lines).encode('utf-8')
+
+
+def make_config(tmp_path, **overrides) -> Config:
+  '''Build a frozen Config without touching env vars.'''
+  config = Config.__new__(Config)
+  defaults = {
+    'printer_ip': '192.168.1.100',
+    'printer_type': 'cc2',
+    'http_port': 80,
+    'mqtt_port': 1883,
+    'camera_port': 8080,
+    'mqtt_ws_port': 9001,
+    'ws_port': 3030,
+    'discovery_port': 3000,
+    'advertise_ip': None,
+    'gcode_dir': str(tmp_path),
+    'retention_days': 90,
+    'gcode_timezone': ZoneInfo('UTC'),
+    'upload_timeout': 300,
+    'max_body_size': 256 * 1024 * 1024,
+    'store_gcode': False,
+    'log_level': 'WARNING',
+  }
+  defaults.update(overrides)
+  for key, value in defaults.items():
+    object.__setattr__(config, key, value)
+  return config
+
+
+def mock_aiohttp_client(status=200, body=b'ok', headers=None, *, error=None):
+  '''Build a mock aiohttp.ClientSession whose request() returns a context manager.
+
+  When *error* is set, ``__aenter__`` raises that exception instead
+  of returning a response (simulates connection failure).
+  '''
+  cm = MagicMock()
+  if error:
+    cm.__aenter__ = AsyncMock(side_effect=error)
+  else:
+    response = MagicMock()
+    response.status = status
+    response.read = AsyncMock(return_value=body)
+    response.headers = headers or {}
+    cm.__aenter__ = AsyncMock(return_value=response)
+  cm.__aexit__ = AsyncMock(return_value=False)
+
+  client = MagicMock()
+  client.request = MagicMock(return_value=cm)
+  return client
+
+
+def build_cc1_multipart(
+  uuid: str,
+  offset: int,
+  total_size: int,
+  file_data: bytes,
+  filename: str = 'test.gcode',
+  md5: str = 'abc123',
+) -> tuple[bytes, str]:
+  '''Build a CC1-style multipart form body and return (body, content_type).'''
+  boundary = '----WebKitFormBoundary111111111aaaaAA'
+  parts = []
+
+  fields = {
+    'Check': '1',
+    'S-File-MD5': md5,
+    'Offset': str(offset),
+    'Uuid': uuid,
+    'TotalSize': str(total_size),
+  }
+
+  for field_name, field_value in fields.items():
+    parts.append(
+      f'------{boundary}\r\n'
+      f'Content-Disposition: form-data; name="{field_name}"\r\n'
+      f'\r\n'
+      f'{field_value}\r\n'
+    )
+
+  parts.append(
+    f'------{boundary}\r\n'
+    f'Content-Disposition: form-data; name="File"; filename="{filename}"\r\n'
+    f'Content-Type: application/octet-stream\r\n'
+    f'\r\n'
+  )
+  file_part_header = ''.join(parts).encode()
+  file_part_footer = f'\r\n------{boundary}--\r\n'.encode()
+
+  body = file_part_header + file_data + file_part_footer
+  content_type = f'multipart/form-data; boundary=----{boundary}'
+  return body, content_type

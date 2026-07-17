@@ -1,10 +1,10 @@
 [project]
-name = "cc2-gcode-capture-proxy"
-version = "1.2.0"
-description = "Local network reverse proxy that captures G-code files uploaded to an Elegoo Centauri Carbon 2 printer"
+name = "elegoo-printer-proxy"
+version = "2.0.0"
+description = "Local network reverse proxy that captures G-code files uploaded to Elegoo 3D printers"
 readme = "README.md"
 license = {text = "CC0-1.0"}
-repository = "https://github.com/lantern-eight/cc2-gcode-capture-proxy"
+repository = "https://github.com/lantern-eight/elegoo-printer-proxy"
 requires-python = ">=3.12"
 dependencies = [
   "aiohttp>=3.9,<4",
@@ -14,7 +14,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.25", "ruff>=0.8", "pre-commit>=4"]
 
 [project.scripts]
-cc2-proxy = "src.main:main"
+elegoo-proxy = "src.main:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

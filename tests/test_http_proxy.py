@@ -10,15 +10,18 @@ import asyncio
 import io
 import time
 from unittest.mock import AsyncMock, MagicMock
-from zoneinfo import ZoneInfo
 
 import aiohttp
 import pytest
 
-from src.config import Config
 from src.http_proxy import HTTPProxy, _parse_content_range, _UploadSession
 from src.storage import GCodeStorage
-from tests.conftest import make_gcode
+from tests.conftest import (
+  build_cc1_multipart,
+  make_config,
+  make_gcode,
+  mock_aiohttp_client,
+)
 
 # ===================================================================
 # Content-Range parsing
@@ -87,6 +90,32 @@ class TestUploadSession:
     session.write_chunk(0, b'Y' * 200)
     assert session.bytes_written == 600  # doesn't regress
 
+  def test_gap_keeps_session_incomplete_until_filled(self, tmp_path):
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    session = _UploadSession(total_size=600, storage=storage)
+
+    session.write_chunk(500, b'Z' * 100)
+    assert session.bytes_written == 600  # high-water mark reached total…
+    assert not session.complete  # …but bytes 0-499 never arrived
+
+    session.write_chunk(0, b'Y' * 500)
+    assert session.complete
+
+  def test_gap_with_path_chunks_keeps_session_incomplete(self, tmp_path):
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    session = _UploadSession(total_size=600, storage=storage)
+
+    tail = tmp_path / 'tail.bin'
+    tail.write_bytes(b'Z' * 100)
+    session.write_chunk(500, tail)
+    assert session.bytes_written == 600
+    assert not session.complete
+
+    head = tmp_path / 'head.bin'
+    head.write_bytes(b'Y' * 500)
+    session.write_chunk(0, head)
+    assert session.complete
+
   def test_finalize_saves_and_cleans_temp(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     data = make_gcode(input_filename_base='finalized')
@@ -113,23 +142,11 @@ class TestUploadSession:
 # ===================================================================
 
 
-def _make_proxy(
-  tmp_path, *, store_gcode=False, max_body_size=256 * 1024 * 1024
-) -> HTTPProxy:
-  config = Config.__new__(Config)
-  object.__setattr__(config, 'printer_ip', '192.168.1.100')
-  object.__setattr__(config, 'http_port', 80)
-  object.__setattr__(config, 'mqtt_port', 1883)
-  object.__setattr__(config, 'camera_port', 8080)
-  object.__setattr__(config, 'mqtt_ws_port', 9001)
-  object.__setattr__(config, 'gcode_dir', str(tmp_path))
-  object.__setattr__(config, 'retention_days', 90)
-  object.__setattr__(config, 'gcode_timezone', ZoneInfo('UTC'))
-  object.__setattr__(config, 'upload_timeout', 300)
-  object.__setattr__(config, 'max_body_size', max_body_size)
-  object.__setattr__(config, 'store_gcode', store_gcode)
-  object.__setattr__(config, 'log_level', 'WARNING')
-  storage = GCodeStorage(str(tmp_path), retention_days=90, store_gcode=store_gcode)
+def _make_proxy(tmp_path, **overrides) -> HTTPProxy:
+  config = make_config(tmp_path, **overrides)
+  storage = GCodeStorage(
+    str(tmp_path), retention_days=90, store_gcode=config.store_gcode
+  )
   return HTTPProxy(config, storage)
 
 
@@ -653,28 +670,6 @@ class TestHeaderFiltering:
 # ===================================================================
 
 
-def _mock_aiohttp_client(status=200, body=b'ok', headers=None, *, error=None):
-  '''Build a mock aiohttp.ClientSession whose request() returns a context manager.
-
-  When *error* is set, ``__aenter__`` raises that exception instead
-  of returning a response (simulates connection failure).
-  '''
-  cm = MagicMock()
-  if error:
-    cm.__aenter__ = AsyncMock(side_effect=error)
-  else:
-    response = MagicMock()
-    response.status = status
-    response.read = AsyncMock(return_value=body)
-    response.headers = headers or {}
-    cm.__aenter__ = AsyncMock(return_value=response)
-  cm.__aexit__ = AsyncMock(return_value=False)
-
-  client = MagicMock()
-  client.request = MagicMock(return_value=cm)
-  return client
-
-
 class TestForwardStreaming:
   @pytest.mark.asyncio
   async def test_path_body_streams_file_handle(self, tmp_path):
@@ -683,7 +678,7 @@ class TestForwardStreaming:
     data_file = tmp_path / 'upload.bin'
     data_file.write_bytes(b'X' * 1024)
 
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
     await proxy._forward('PUT', '/upload', {'Host': 'x'}, data_file)
 
     _, kwargs = proxy._client.request.call_args
@@ -696,7 +691,7 @@ class TestForwardStreaming:
     data_file = tmp_path / 'upload.bin'
     data_file.write_bytes(b'hello')
 
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
     await proxy._forward('PUT', '/upload', {'Host': 'x'}, data_file)
 
     _, kwargs = proxy._client.request.call_args
@@ -709,7 +704,7 @@ class TestForwardStreaming:
     data_file = tmp_path / 'upload.bin'
     data_file.write_bytes(b'hello')
 
-    proxy._client = _mock_aiohttp_client(error=aiohttp.ClientError())
+    proxy._client = mock_aiohttp_client(error=aiohttp.ClientError())
     status, _, _ = await proxy._forward('PUT', '/upload', {'Host': 'x'}, data_file)
 
     assert status is None
@@ -720,7 +715,7 @@ class TestForwardStreaming:
   async def test_bytes_body_passed_directly(self, tmp_path):
     '''bytes body should be forwarded as-is, no file handle involved.'''
     proxy = _make_proxy(tmp_path)
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
 
     await proxy._forward('GET', '/status', {'Host': 'x'}, b'raw')
 
@@ -731,7 +726,7 @@ class TestForwardStreaming:
   async def test_none_body_passed_directly(self, tmp_path):
     '''None body (e.g. GET with no content) forwards None.'''
     proxy = _make_proxy(tmp_path)
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
 
     await proxy._forward('GET', '/status', {'Host': 'x'}, None)
 
@@ -757,18 +752,7 @@ class TestStaleSessionCleanup:
     fresh = _UploadSession(total_size=2000, storage=storage)
     proxy._sessions[(None, 2000)] = fresh
 
-    cutoff = time.monotonic() - proxy._config.upload_timeout
-    async with proxy._lock:
-      stale_keys = [
-        session_key
-        for session_key, session in proxy._sessions.items()
-        if session.created < cutoff
-      ]
-      for session_key in stale_keys:
-        session = proxy._sessions[session_key]
-        async with session.lock:
-          session.discard()
-        del proxy._sessions[session_key]
+    await proxy._manager.cleanup(proxy._config.upload_timeout)
 
     assert (None, 1000) not in proxy._sessions
     assert (None, 2000) in proxy._sessions
@@ -781,18 +765,7 @@ class TestStaleSessionCleanup:
     recent = _UploadSession(total_size=3000, storage=storage)
     proxy._sessions[(None, 3000)] = recent
 
-    cutoff = time.monotonic() - proxy._config.upload_timeout
-    async with proxy._lock:
-      stale_keys = [
-        session_key
-        for session_key, session in proxy._sessions.items()
-        if session.created < cutoff
-      ]
-      for session_key in stale_keys:
-        session = proxy._sessions[session_key]
-        async with session.lock:
-          session.discard()
-        del proxy._sessions[session_key]
+    await proxy._manager.cleanup(proxy._config.upload_timeout)
 
     assert (None, 3000) in proxy._sessions
 
@@ -834,3 +807,139 @@ class TestProxyLifecycle:
     assert len(proxy._sessions) == 0
     assert not storage.temp_path(s1.upload_id).exists()
     assert not storage.temp_path(s2.upload_id).exists()
+
+
+# ===================================================================
+# CC1 SDCP upload on port 80
+# ===================================================================
+
+
+class TestCC1UploadOnPort80:
+  '''ElegooSlicer uploads CC1 gcode via the printer's port-80 endpoint.'''
+
+  @pytest.mark.asyncio
+  async def test_post_uploadfile_intercepted(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._handle_cc1_upload = AsyncMock(return_value=MagicMock())
+    proxy._passthrough = AsyncMock(return_value=MagicMock())
+
+    request = _mock_request('POST', '/uploadFile/upload')
+    await proxy.handle_request(request)
+
+    proxy._handle_cc1_upload.assert_called_once()
+    proxy._passthrough.assert_not_called()
+
+  @pytest.mark.asyncio
+  async def test_get_uploadfile_goes_to_passthrough(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._handle_cc1_upload = AsyncMock(return_value=MagicMock())
+    proxy._passthrough = AsyncMock(return_value=MagicMock())
+
+    request = _mock_request('GET', '/uploadFile/upload')
+    await proxy.handle_request(request)
+
+    proxy._handle_cc1_upload.assert_not_called()
+    proxy._passthrough.assert_called_once()
+
+  @pytest.mark.asyncio
+  async def test_chunk_forwarded_and_archived(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._forward = AsyncMock(return_value=(200, b'{"code": "000000"}', {}))
+
+    data = make_gcode(input_filename_base='cc1_port80')
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-80',
+      offset=0,
+      total_size=len(data),
+      file_data=data,
+      filename='cc1_port80.gcode',
+    )
+    request = _mock_request(
+      'POST',
+      '/uploadFile/upload',
+      headers={'Content-Type': content_type},
+      body=body,
+    )
+
+    response = await proxy.handle_request(request)
+
+    assert response.status == 200
+    proxy._forward.assert_called_once()
+    assert list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
+  async def test_unreachable_printer_returns_502(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._forward = AsyncMock(return_value=(None, None, None))
+
+    data = make_gcode(input_filename_base='unreachable')
+    body, content_type = build_cc1_multipart(
+      uuid='uuid-un', offset=0, total_size=len(data), file_data=data
+    )
+    request = _mock_request(
+      'POST',
+      '/uploadFile/upload',
+      headers={'Content-Type': content_type},
+      body=body,
+    )
+
+    response = await proxy.handle_request(request)
+
+    assert response.status == 502
+    assert not list(tmp_path.rglob('*.json'))
+
+  @pytest.mark.asyncio
+  async def test_stop_discards_cc1_sessions(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    proxy._client = MagicMock()
+    proxy._client.close = AsyncMock()
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+
+    from src.cc1_upload import CC1UploadSession
+
+    session = CC1UploadSession('cc1-uuid', 100, storage)
+    session.write_chunk(0, b'X' * 10)
+    proxy._cc1_capture.sessions['cc1-uuid'] = session
+
+    await proxy.stop()
+
+    assert not proxy._cc1_capture.sessions
+    assert not storage.temp_path('cc1_cc1-uuid').exists()
+
+
+# ===================================================================
+# MainboardIP rewrite on port-80 responses
+# ===================================================================
+
+
+class TestMainboardIPRewrite:
+  @pytest.mark.asyncio
+  async def test_response_rewritten_when_advertising(self, tmp_path):
+    proxy = _make_proxy(tmp_path, advertise_ip='192.168.1.200')
+    printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
+    proxy._client = mock_aiohttp_client(
+      body=printer_payload,
+      headers={'Content-Length': str(len(printer_payload))},
+    )
+
+    status, body, headers = await proxy._forward('GET', '/info', {}, None)
+
+    assert status == 200
+    assert b'192.168.1.200' in body
+    assert b'192.168.1.100' not in body
+    assert 'Content-Length' not in headers
+
+  @pytest.mark.asyncio
+  async def test_response_untouched_without_advertise_ip(self, tmp_path):
+    proxy = _make_proxy(tmp_path)
+    printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
+    proxy._client = mock_aiohttp_client(
+      body=printer_payload,
+      headers={'Content-Length': str(len(printer_payload))},
+    )
+
+    status, body, headers = await proxy._forward('GET', '/info', {}, None)
+
+    assert status == 200
+    assert body == printer_payload
+    assert 'Content-Length' not in headers

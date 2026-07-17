@@ -1,0 +1,61 @@
+# Copy to docker-compose.yml and edit the IPs to match your LAN.
+#
+# Deployment model: one container per printer, one dedicated host IP per
+# printer. The slicer only accepts an IP address (no port override), and
+# printer ports are fixed by the protocol — so two printers of the same
+# type would collide on ports if they shared an IP. A dedicated IP per
+# printer keeps every printer's full native port set and scales to any
+# number of printers: add an IP, copy a service block, done.
+#
+# The proxy IPs are secondary addresses ("aliases") on the Docker host's
+# LAN interface:
+#   - macOS: sudo ./scripts/setup_macos_ips.sh   (reads IPs from this file)
+#   - Linux: sudo ip addr add 192.168.1.101/24 dev eth0   (see README)
+# Pick IPs outside your router's DHCP pool so they are never handed out
+# to another device.
+#
+# Each service needs its own env file (.env.cc1 / .env.cc2 — copy
+# .env.example) holding at minimum PRINTER_IP and PRINTER_TYPE.
+
+services:
+  cc2-proxy:
+    build: .
+    container_name: elegoo-proxy-cc2
+    restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+    ports:
+      - "192.168.1.101:80:80"      # HTTP uploads + REST API
+      - "192.168.1.101:1883:1883"  # MQTT (slicer C++ library)
+      - "192.168.1.101:8080:8080"  # camera MJPEG stream
+      - "192.168.1.101:9001:9001"  # MQTT over WebSocket (Device page JS)
+    volumes:
+      - ./gcode-archive/cc2:/data/gcode
+    env_file:
+      - .env.cc2
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cc1-proxy:
+    build: .
+    container_name: elegoo-proxy-cc1
+    restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+    ports:
+      - "192.168.1.102:80:80"          # REST API + HTTP pass-through
+      - "192.168.1.102:3030:3030"      # WebSocket/SDCP control + uploads
+      - "192.168.1.102:3000:3000/udp"  # discovery relay (rewrites MainboardIP)
+      - "192.168.1.102:8080:8080"      # camera
+    volumes:
+      - ./gcode-archive/cc1:/data/gcode
+    env_file:
+      - .env.cc1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

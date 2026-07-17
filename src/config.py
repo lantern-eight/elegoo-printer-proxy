@@ -13,11 +13,28 @@ def _parse_timezone() -> ZoneInfo:
   return ZoneInfo(name)
 
 
-def _parse_printer_ip() -> str | None:
-  raw = os.getenv('PRINTER_IP')
+def _parse_optional_ip(env_var: str) -> str | None:
+  '''Parse an IPv4 address from *env_var*, or None when unset/blank.
+
+  IPv4 only: consumers interpolate this value into URLs, Host headers,
+  and SDCP MainboardIP payloads without IPv6 bracket handling.
+  '''
+  raw = os.getenv(env_var)
   if not raw or not raw.strip():
     return None
-  return str(ipaddress.ip_address(raw.strip()))
+  try:
+    return str(ipaddress.IPv4Address(raw.strip()))
+  except ipaddress.AddressValueError:
+    raise ValueError(
+      f'{env_var} must be an IPv4 address, got {raw.strip()!r}'
+    ) from None
+
+
+def _parse_printer_type() -> str:
+  raw = (os.getenv('PRINTER_TYPE') or 'auto').strip().lower()
+  if raw not in ('cc1', 'cc2', 'auto'):
+    raise ValueError(f"PRINTER_TYPE must be 'cc1', 'cc2', or 'auto', got '{raw}'")
+  return raw
 
 
 def _parse_port(env_var: str, default: int) -> int:
@@ -36,7 +53,10 @@ def _parse_non_negative_int(env_var: str, default: str) -> int:
 
 @dataclass(frozen=True)
 class Config:
-  printer_ip: str | None = field(default_factory=_parse_printer_ip)
+  printer_ip: str | None = field(
+    default_factory=lambda: _parse_optional_ip('PRINTER_IP')
+  )
+  printer_type: str = field(default_factory=_parse_printer_type)
 
   http_port: int = field(
     default_factory=lambda: _parse_port('HTTP_PORT', 80),
@@ -49,6 +69,20 @@ class Config:
   )
   mqtt_ws_port: int = field(
     default_factory=lambda: _parse_port('MQTT_WS_PORT', 9001),
+  )
+  ws_port: int = field(
+    default_factory=lambda: _parse_port('WS_PORT', 3030),
+  )
+  discovery_port: int = field(
+    default_factory=lambda: _parse_port('DISCOVERY_PORT', 3000),
+  )
+
+  # LAN address the proxy is reachable on (the per-printer host IP).
+  # Required for CC1 slicer redirection: discovery replies and WS frames
+  # advertise this address as MainboardIP so uploads route through the
+  # proxy instead of going straight to the printer.
+  advertise_ip: str | None = field(
+    default_factory=lambda: _parse_optional_ip('ADVERTISE_IP')
   )
 
   gcode_dir: str = field(default_factory=lambda: os.getenv('GCODE_DIR', '/data/gcode'))
