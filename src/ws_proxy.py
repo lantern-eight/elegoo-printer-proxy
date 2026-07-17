@@ -187,6 +187,7 @@ class WSProxy:
       request.path_qs,
       request.headers,
       raw_body,
+      config=self._config,
     )
     if status is None:
       return web.json_response({'error': 'printer_unreachable'}, status=502)
