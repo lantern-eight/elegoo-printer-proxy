@@ -73,7 +73,7 @@ class _ForwardProtocol(asyncio.DatagramProtocol):
       self._transport.close()
 
 
-def rewrite_mainboard_ip(payload: bytes, printer_ip: str, advertise_ip: str) -> bytes:
+def rewrite_mainboard_ip_str(payload: str, printer_ip: str, advertise_ip: str) -> str:
   '''
   Replace MainboardIP values equal to printer_ip with advertise_ip.
 
@@ -83,12 +83,24 @@ def rewrite_mainboard_ip(payload: bytes, printer_ip: str, advertise_ip: str) -> 
   alone so direct-to-printer streams keep working.
   '''
   try:
-    data = json.loads(payload.decode('utf-8'))
-  except (UnicodeDecodeError, json.JSONDecodeError):
+    data = json.loads(payload)
+  except (ValueError, json.JSONDecodeError):
     return payload
   if not _rewrite_in_place(data, printer_ip, advertise_ip):
     return payload
-  return json.dumps(data).encode('utf-8')
+  return json.dumps(data)
+
+
+def rewrite_mainboard_ip(payload: bytes, printer_ip: str, advertise_ip: str) -> bytes:
+  '''Bytes wrapper around rewrite_mainboard_ip_str.'''
+  try:
+    text = payload.decode('utf-8')
+  except UnicodeDecodeError:
+    return payload
+  result = rewrite_mainboard_ip_str(text, printer_ip, advertise_ip)
+  if result is text:
+    return payload
+  return result.encode('utf-8')
 
 
 def _rewrite_in_place(node: Any, printer_ip: str, advertise_ip: str) -> bool:

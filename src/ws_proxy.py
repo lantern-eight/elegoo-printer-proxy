@@ -16,7 +16,7 @@ import aiohttp
 from aiohttp import web
 
 from .cc1_upload import CC1UploadCapture
-from .discovery_relay import rewrite_mainboard_ip
+from .discovery_relay import rewrite_mainboard_ip_str
 from .http_proxy import forward_to_printer
 from .storage import GCodeStorage
 
@@ -73,8 +73,7 @@ class WSProxy:
     printer_ip = self._config.printer_ip
     if not advertise_ip or not printer_ip or 'MainboardIP' not in data:
       return data
-    rewritten = rewrite_mainboard_ip(data.encode('utf-8'), printer_ip, advertise_ip)
-    return rewritten.decode('utf-8')
+    return rewrite_mainboard_ip_str(data, printer_ip, advertise_ip)
 
   # ---- request routing ----
 
