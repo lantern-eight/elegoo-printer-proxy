@@ -283,6 +283,10 @@ class TestWSProxyLifecycle:
 
     session_1 = CC1UploadSession('uuid-1', 100, storage)
     session_2 = CC1UploadSession('uuid-2', 200, storage)
+    session_1.write_chunk(0, b'A')
+    session_2.write_chunk(0, b'B')
+    assert storage.temp_path('cc1_uuid-1').exists()
+    assert storage.temp_path('cc1_uuid-2').exists()
     proxy._capture.sessions['uuid-1'] = session_1
     proxy._capture.sessions['uuid-2'] = session_2
 
