@@ -21,8 +21,6 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from .detect import _probe_udp
-
 if TYPE_CHECKING:
   from .config import Config
 
@@ -33,6 +31,46 @@ logger = logging.getLogger(__name__)
 PRINTER_DISCOVERY_PORT = 3000
 
 _PRINTER_REPLY_TIMEOUT = 2.0
+
+
+class _ForwardProtocol(asyncio.DatagramProtocol):
+  '''Persistent UDP forwarder: one socket reused across all probes.'''
+
+  def __init__(self) -> None:
+    self._transport: asyncio.DatagramTransport | None = None
+    self._waiters: set[asyncio.Future] = set()
+
+  def connection_made(self, transport: asyncio.BaseTransport) -> None:
+    self._transport = transport  # type: ignore[assignment]
+
+  def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+    for w in list(self._waiters):
+      if not w.done():
+        w.set_result(data)
+    self._waiters.clear()
+
+  def error_received(self, exception: Exception) -> None:
+    for w in list(self._waiters):
+      if not w.done():
+        w.set_exception(exception)
+    self._waiters.clear()
+
+  async def probe(self, message: bytes, deadline: float) -> bytes | None:
+    assert self._transport is not None
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    self._waiters.add(future)
+    self._transport.sendto(message)
+    try:
+      return await asyncio.wait_for(future, timeout=deadline)
+    except (TimeoutError, OSError):
+      return None
+    finally:
+      self._waiters.discard(future)
+
+  def close(self) -> None:
+    if self._transport:
+      self._transport.close()
 
 
 def rewrite_mainboard_ip(payload: bytes, printer_ip: str, advertise_ip: str) -> bytes:
@@ -81,10 +119,8 @@ class DiscoveryRelayProtocol(asyncio.DatagramProtocol):
     self._printer_ip = printer_ip
     self._advertise_ip = advertise_ip
     self._transport: asyncio.DatagramTransport | None = None
+    self._fwd: _ForwardProtocol | None = None
     self._tasks: set[asyncio.Task] = set()
-    # Clients probe repeatedly (the slicer re-scans while its device page
-    # is open); log each client's first redirect at INFO, the rest at
-    # DEBUG so discovery chatter can't drown upload-capture log lines.
     self._seen_clients: set[str] = set()
 
   def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -95,13 +131,19 @@ class DiscoveryRelayProtocol(asyncio.DatagramProtocol):
     self._tasks.add(task)
     task.add_done_callback(self._tasks.discard)
 
+  def connection_lost(self, exc: Exception | None) -> None:
+    if self._fwd is not None:
+      self._fwd.close()
+
   async def _relay(self, data: bytes, addr: tuple[str, int]) -> None:
-    reply = await _probe_udp(
-      self._printer_addr[0],
-      self._printer_addr[1],
-      data,
-      _PRINTER_REPLY_TIMEOUT,
-    )
+    if self._fwd is None:
+      loop = asyncio.get_running_loop()
+      _, self._fwd = await loop.create_datagram_endpoint(
+        _ForwardProtocol,
+        remote_addr=self._printer_addr,
+      )
+
+    reply = await self._fwd.probe(data, _PRINTER_REPLY_TIMEOUT)
     if reply is None:
       logger.debug('Discovery: no printer reply for probe from %s', addr)
       return
