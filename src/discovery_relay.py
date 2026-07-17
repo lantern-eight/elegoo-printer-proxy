@@ -21,6 +21,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .detect import _probe_udp
+
 if TYPE_CHECKING:
   from .config import Config
 
@@ -94,26 +96,15 @@ class DiscoveryRelayProtocol(asyncio.DatagramProtocol):
     task.add_done_callback(self._tasks.discard)
 
   async def _relay(self, data: bytes, addr: tuple[str, int]) -> None:
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future[bytes] = loop.create_future()
-
-    class _PrinterReply(asyncio.DatagramProtocol):
-      def datagram_received(self, reply: bytes, _addr: tuple[str, int]) -> None:
-        if not future.done():
-          future.set_result(reply)
-
-    transport, _protocol = await loop.create_datagram_endpoint(
-      _PrinterReply,
-      remote_addr=self._printer_addr,
+    reply = await _probe_udp(
+      self._printer_addr[0],
+      self._printer_addr[1],
+      data,
+      _PRINTER_REPLY_TIMEOUT,
     )
-    try:
-      transport.sendto(data)
-      reply = await asyncio.wait_for(future, _PRINTER_REPLY_TIMEOUT)
-    except TimeoutError:
+    if reply is None:
       logger.debug('Discovery: no printer reply for probe from %s', addr)
       return
-    finally:
-      transport.close()
 
     rewritten = rewrite_mainboard_ip(reply, self._printer_ip, self._advertise_ip)
     if self._transport is None:
