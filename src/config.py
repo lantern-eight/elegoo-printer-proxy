@@ -13,8 +13,8 @@ def _parse_timezone() -> ZoneInfo:
   return ZoneInfo(name)
 
 
-def _parse_printer_ip() -> str | None:
-  raw = os.getenv('PRINTER_IP')
+def _parse_optional_ip(env_var: str) -> str | None:
+  raw = os.getenv(env_var)
   if not raw or not raw.strip():
     return None
   return str(ipaddress.ip_address(raw.strip()))
@@ -25,13 +25,6 @@ def _parse_printer_type() -> str:
   if raw not in ('cc1', 'cc2', 'auto'):
     raise ValueError(f"PRINTER_TYPE must be 'cc1', 'cc2', or 'auto', got '{raw}'")
   return raw
-
-
-def _parse_advertise_ip() -> str | None:
-  raw = os.getenv('ADVERTISE_IP')
-  if not raw or not raw.strip():
-    return None
-  return str(ipaddress.ip_address(raw.strip()))
 
 
 def _parse_port(env_var: str, default: int) -> int:
@@ -50,7 +43,7 @@ def _parse_non_negative_int(env_var: str, default: str) -> int:
 
 @dataclass(frozen=True)
 class Config:
-  printer_ip: str | None = field(default_factory=_parse_printer_ip)
+  printer_ip: str | None = field(default_factory=lambda: _parse_optional_ip('PRINTER_IP'))
   printer_type: str = field(default_factory=_parse_printer_type)
 
   http_port: int = field(
@@ -76,7 +69,7 @@ class Config:
   # Required for CC1 slicer redirection: discovery replies and WS frames
   # advertise this address as MainboardIP so uploads route through the
   # proxy instead of going straight to the printer.
-  advertise_ip: str | None = field(default_factory=_parse_advertise_ip)
+  advertise_ip: str | None = field(default_factory=lambda: _parse_optional_ip('ADVERTISE_IP'))
 
   gcode_dir: str = field(default_factory=lambda: os.getenv('GCODE_DIR', '/data/gcode'))
   retention_days: int = field(
