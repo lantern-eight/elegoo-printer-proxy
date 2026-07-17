@@ -74,3 +74,42 @@ class TestLateChunkAfterFinalize:
     assert len(saves) == 1
     assert manager.sessions == {}
     assert not storage.temp_path('cc1_race-uuid').exists()
+
+
+class TestDiscardAllSynchronization:
+  @pytest.mark.asyncio
+  async def test_discard_all_waits_for_active_writer(self, tmp_path):
+    '''Shutdown must not delete a session's temp file while a chunk
+    write is still in flight — the writer would recreate it after
+    discard and leak it.'''
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    manager = ChunkSessionManager()
+
+    in_write = threading.Event()
+    release_write = threading.Event()
+
+    def factory():
+      session = CC1UploadSession('busy-uuid', 1000, storage)
+      bound_write = session.write_chunk
+
+      def slow_write(offset, data):
+        in_write.set()
+        assert release_write.wait(timeout=5)
+        bound_write(offset, data)
+
+      session.write_chunk = slow_write
+      return session
+
+    writer = asyncio.create_task(manager.save_chunk('busy-uuid', 0, b'X' * 10, factory))
+    await asyncio.to_thread(in_write.wait, 5)
+
+    discard = asyncio.create_task(manager.discard_all())
+    await asyncio.sleep(0.05)
+    assert not discard.done()
+
+    release_write.set()
+    await writer
+    await discard
+
+    assert manager.sessions == {}
+    assert not storage.temp_path('cc1_busy-uuid').exists()

@@ -138,6 +138,11 @@ class ChunkSessionManager:
     return len(stale)
 
   async def discard_all(self) -> None:
-    for session in self.sessions.values():
-      await asyncio.to_thread(session.discard)
-    self.sessions.clear()
+    '''Discard every session. Waits for in-flight writers via the same
+    manager→session lock order as save_chunk/cleanup, so files are never
+    removed beneath an active write.'''
+    async with self._lock:
+      for session in self.sessions.values():
+        async with session.lock:
+          await asyncio.to_thread(session.discard)
+      self.sessions.clear()

@@ -176,8 +176,11 @@ async def _run() -> None:
     *background_tasks,
     return_exceptions=True,
   )
-  await http_proxy.stop()
+  # Stop accepting/draining port-80 requests before tearing down the proxy:
+  # stop() closes the shared HTTP client and discards upload sessions, which
+  # must not happen beneath handlers that are still running.
   await runner.cleanup()
+  await http_proxy.stop()
   logger.info('Shutdown complete')
 
 
