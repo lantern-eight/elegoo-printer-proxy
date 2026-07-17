@@ -905,7 +905,7 @@ class TestCC1UploadOnPort80:
 
     from src.cc1_upload import CC1UploadSession
 
-    session = CC1UploadSession('cc1-uuid', 100, 'md5', storage)
+    session = CC1UploadSession('cc1-uuid', 100, storage)
     session.write_chunk(0, b'X' * 10)
     proxy._cc1_capture.sessions['cc1-uuid'] = session
 

@@ -59,7 +59,7 @@ def _make_config(tmp_path, **overrides) -> Config:
 class TestCC1UploadSession:
   def test_write_first_chunk(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
-    session = CC1UploadSession('test-uuid', 100, 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', 100, storage)
 
     session.write_chunk(0, b'A' * 50)
     assert session.bytes_written == 50
@@ -68,14 +68,14 @@ class TestCC1UploadSession:
   def test_complete_when_all_bytes_written(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     data = make_gcode(input_filename_base='test')
-    session = CC1UploadSession('test-uuid', len(data), 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', len(data), storage)
 
     session.write_chunk(0, data)
     assert session.complete
 
   def test_bytes_written_tracks_high_water_mark(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
-    session = CC1UploadSession('test-uuid', 1000, 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', 1000, storage)
 
     session.write_chunk(500, b'X' * 100)
     assert session.bytes_written == 600
@@ -86,7 +86,7 @@ class TestCC1UploadSession:
   def test_finalize_saves_and_cleans_temp(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     data = make_gcode(input_filename_base='finalized')
-    session = CC1UploadSession('test-uuid', len(data), 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', len(data), storage)
     session.write_chunk(0, data)
 
     json_path, metadata = session.finalize()
@@ -96,7 +96,7 @@ class TestCC1UploadSession:
 
   def test_discard_cleans_temp(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
-    session = CC1UploadSession('test-uuid', 100, 'md5hash', storage)
+    session = CC1UploadSession('test-uuid', 100, storage)
     session.write_chunk(0, b'X' * 50)
 
     session.discard()
@@ -273,11 +273,11 @@ class TestWSProxyStaleCleanup:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
 
-    stale = CC1UploadSession('stale-uuid', 1000, 'md5', storage)
+    stale = CC1UploadSession('stale-uuid', 1000, storage)
     stale.created = time.monotonic() - 600
     proxy._capture.sessions['stale-uuid'] = stale
 
-    fresh = CC1UploadSession('fresh-uuid', 2000, 'md5', storage)
+    fresh = CC1UploadSession('fresh-uuid', 2000, storage)
     proxy._capture.sessions['fresh-uuid'] = fresh
 
     removed = await proxy._capture.cleanup_once()
@@ -292,7 +292,7 @@ class TestWSProxyStaleCleanup:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
 
-    fresh = CC1UploadSession('fresh-uuid', 1000, 'md5', storage)
+    fresh = CC1UploadSession('fresh-uuid', 1000, storage)
     proxy._capture.sessions['fresh-uuid'] = fresh
 
     removed = await proxy._capture.cleanup_once()
@@ -317,8 +317,8 @@ class TestWSProxyLifecycle:
     proxy._runner = MagicMock()
     proxy._runner.cleanup = AsyncMock()
 
-    session_1 = CC1UploadSession('uuid-1', 100, 'md5', storage)
-    session_2 = CC1UploadSession('uuid-2', 200, 'md5', storage)
+    session_1 = CC1UploadSession('uuid-1', 100, storage)
+    session_2 = CC1UploadSession('uuid-2', 200, storage)
     proxy._capture.sessions['uuid-1'] = session_1
     proxy._capture.sessions['uuid-2'] = session_2
 

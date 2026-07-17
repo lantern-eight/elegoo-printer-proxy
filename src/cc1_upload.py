@@ -40,13 +40,11 @@ class CC1UploadSession(BaseUploadSession):
     self,
     uuid: str,
     total_size: int,
-    md5: str,
     storage: GCodeStorage,
   ) -> None:
     safe_uuid = re.sub(r'[^a-zA-Z0-9\-]', '', uuid)
     super().__init__(total_size, f'cc1_{safe_uuid}', storage)
     self.uuid = uuid
-    self.md5 = md5
 
 
 def parse_multipart_bytes(raw_body: bytes, content_type: str) -> dict | None:
@@ -143,7 +141,6 @@ class CC1UploadCapture:
       logger.warning('CC1 upload: missing Uuid or TotalSize, forwarding raw')
       return await forward(request, raw_body)
 
-    file_md5 = fields.get('S-File-MD5', '')
     file_data = fields.get('file_data', b'')
     filename = fields.get('filename')
 
@@ -174,7 +171,7 @@ class CC1UploadCapture:
         upload_uuid,
         offset,
         file_data,
-        lambda: CC1UploadSession(upload_uuid, total_size, file_md5, self._storage),
+        lambda: CC1UploadSession(upload_uuid, total_size, self._storage),
         filename_hint=filename,
       )
     except Exception:

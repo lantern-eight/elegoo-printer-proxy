@@ -316,10 +316,10 @@ class TestCleanup:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     capture = CC1UploadCapture(storage, upload_timeout=300)
 
-    stale = CC1UploadSession('stale-uuid', 1000, 'md5', storage)
+    stale = CC1UploadSession('stale-uuid', 1000, storage)
     stale.created = time.monotonic() - 600
     capture.sessions['stale-uuid'] = stale
-    fresh = CC1UploadSession('fresh-uuid', 2000, 'md5', storage)
+    fresh = CC1UploadSession('fresh-uuid', 2000, storage)
     capture.sessions['fresh-uuid'] = fresh
 
     removed = await capture.cleanup_once()
