@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
 import uuid
 from pathlib import Path
 
@@ -24,7 +23,7 @@ from .cc1_upload import CC1UploadCapture
 from .config import Config
 from .discovery_relay import rewrite_mainboard_ip
 from .storage import GCodeStorage
-from .upload_session import BaseUploadSession
+from .upload_session import BaseUploadSession, ChunkSessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -159,11 +158,8 @@ class HTTPProxy:
     self._config = config
     self._storage = storage
     self._printer = f'http://{config.printer_ip}'
-    self._sessions: dict[tuple[str | None, int], _UploadSession] = {}
-    # Lock ordering: always acquire self._lock before session.lock.
-    # Both _save and cleanup_stale_sessions rely on this invariant
-    # to avoid deadlocks.
-    self._lock = asyncio.Lock()
+    self._manager = ChunkSessionManager()
+    self._sessions = self._manager.sessions
     self._cc1_capture = CC1UploadCapture(storage, config.upload_timeout)
     self._client: aiohttp.ClientSession | None = None
 
@@ -177,9 +173,7 @@ class HTTPProxy:
   async def stop(self) -> None:
     if self._client:
       await self._client.close()
-    for session in self._sessions.values():
-      await asyncio.to_thread(session.discard)
-    self._sessions.clear()
+    await self._manager.discard_all()
     await self._cc1_capture.discard_all()
 
   # ---- aiohttp request handler (catch-all) ----
@@ -296,37 +290,13 @@ class HTTPProxy:
         (end + 1) / total * 100,
       )
 
-      async with self._lock:
-        session = self._sessions.get(session_key)
-        if session is None or start == 0:
-          if session:
-            await session.lock.acquire()
-            try:
-              await asyncio.to_thread(session.discard)
-            finally:
-              session.lock.release()
-          session = _UploadSession(total, self._storage)
-          self._sessions[session_key] = session
-        await session.lock.acquire()
-
-      try:
-        await asyncio.to_thread(session.write_chunk, start, body)
-        is_complete = session.complete
-      finally:
-        session.lock.release()
-
-      if is_complete:
-        try:
-          path, _meta = await asyncio.to_thread(
-            session.finalize, filename_hint=filename_hint
-          )
-          logger.info('Chunked upload complete: %s', path.name)
-        except Exception:
-          logger.exception('Failed to finalize chunked upload')
-        finally:
-          async with self._lock:
-            if self._sessions.get(session_key) is session:
-              del self._sessions[session_key]
+      await self._manager.save_chunk(
+        session_key,
+        start,
+        body,
+        lambda: _UploadSession(total, self._storage),
+        filename_hint=filename_hint,
+      )
 
     except Exception:
       logger.exception('Failed to save G-code')
@@ -389,17 +359,5 @@ class HTTPProxy:
     '''Periodically discard uploads that never completed.'''
     while True:
       await asyncio.sleep(60)
-      cutoff = time.monotonic() - self._config.upload_timeout
-      async with self._lock:
-        stale = [
-          session_key
-          for session_key, session in self._sessions.items()
-          if session.created < cutoff
-        ]
-        for session_key in stale:
-          session = self._sessions[session_key]
-          async with session.lock:
-            await asyncio.to_thread(session.discard)
-          del self._sessions[session_key]
-          logger.warning('Discarded stale upload session (key=%r)', session_key)
+      await self._manager.cleanup(self._config.upload_timeout)
       await self._cc1_capture.cleanup_once()

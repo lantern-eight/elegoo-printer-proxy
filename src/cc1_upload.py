@@ -12,16 +12,14 @@ final chunk.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-import time
 from typing import TYPE_CHECKING
 
 from aiohttp import web
 
-from .upload_session import BaseUploadSession
+from .upload_session import BaseUploadSession, ChunkSessionManager
 
 if TYPE_CHECKING:
   from collections.abc import Awaitable, Callable
@@ -112,12 +110,11 @@ class CC1UploadCapture:
   def __init__(self, storage: GCodeStorage, upload_timeout: float) -> None:
     self._storage = storage
     self._upload_timeout = upload_timeout
-    self._sessions: dict[str, CC1UploadSession] = {}
-    self._lock = asyncio.Lock()
+    self._manager = ChunkSessionManager()
 
   @property
   def sessions(self) -> dict[str, CC1UploadSession]:
-    return self._sessions
+    return self._manager.sessions
 
   @staticmethod
   def matches(request: web.Request) -> bool:
@@ -130,8 +127,6 @@ class CC1UploadCapture:
     forward: ForwardFn,
   ) -> web.Response:
     '''Forward an upload chunk to the printer, saving a copy on success.'''
-    # request.content_type strips header parameters — including the
-    # multipart boundary — so the parser must see the raw header value.
     content_type = request.headers.get('Content-Type', '')
     fields = parse_multipart_bytes(raw_body, content_type)
     if fields is None:
@@ -175,86 +170,20 @@ class CC1UploadCapture:
       pass
 
     try:
-      await self._save_chunk(
+      await self._manager.save_chunk(
         upload_uuid,
         offset,
-        total_size,
-        file_md5,
         file_data,
-        filename,
+        lambda: CC1UploadSession(upload_uuid, total_size, file_md5, self._storage),
+        filename_hint=filename,
       )
     except Exception:
       logger.exception('Failed to save CC1 upload chunk')
 
     return printer_response
 
-  async def _save_chunk(
-    self,
-    upload_uuid: str,
-    offset: int,
-    total_size: int,
-    file_md5: str,
-    file_data: bytes,
-    filename: str | None,
-  ) -> None:
-    # Acquire self._lock to look up / create the session, then acquire
-    # session.lock before releasing self._lock (end of `async with`).
-    # This avoids holding the global lock during the blocking write.
-    async with self._lock:
-      session = self._sessions.get(upload_uuid)
-      if session is None and offset != 0:
-        logger.warning(
-          'CC1 upload: chunk at offset %d with no session (proxy restart?), skipping capture',
-          offset,
-        )
-        return
-      if session is None or offset == 0:
-        if session is not None:
-          async with session.lock:
-            await asyncio.to_thread(session.discard)
-        session = CC1UploadSession(upload_uuid, total_size, file_md5, self._storage)
-        self._sessions[upload_uuid] = session
-      await session.lock.acquire()
-
-    is_complete = False
-    try:
-      await asyncio.to_thread(session.write_chunk, offset, file_data)
-      if session.complete:
-        is_complete = True
-        try:
-          path, _metadata = await asyncio.to_thread(
-            session.finalize,
-            filename_hint=filename,
-          )
-          logger.info('CC1 upload complete: %s', path.name)
-        except Exception:
-          logger.exception('Failed to finalize CC1 upload')
-    finally:
-      session.lock.release()
-
-    if is_complete:
-      async with self._lock:
-        if self._sessions.get(upload_uuid) is session:
-          del self._sessions[upload_uuid]
-
   async def cleanup_once(self) -> int:
-    '''Single pass: discard uploads older than upload_timeout. Returns count.'''
-    cutoff = time.monotonic() - self._upload_timeout
-    async with self._lock:
-      stale = [
-        session_uuid
-        for session_uuid, session in self._sessions.items()
-        if session.created < cutoff
-      ]
-      for session_uuid in stale:
-        session = self._sessions[session_uuid]
-        async with session.lock:
-          await asyncio.to_thread(session.discard)
-        del self._sessions[session_uuid]
-        logger.warning('Discarded stale CC1 upload session (uuid=%s)', session_uuid[:8])
-    return len(stale)
+    return await self._manager.cleanup(self._upload_timeout)
 
   async def discard_all(self) -> None:
-    for session in self._sessions.values():
-      await asyncio.to_thread(session.discard)
-    self._sessions.clear()
+    await self._manager.discard_all()

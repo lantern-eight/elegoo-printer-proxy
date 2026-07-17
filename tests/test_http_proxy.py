@@ -760,18 +760,7 @@ class TestStaleSessionCleanup:
     fresh = _UploadSession(total_size=2000, storage=storage)
     proxy._sessions[(None, 2000)] = fresh
 
-    cutoff = time.monotonic() - proxy._config.upload_timeout
-    async with proxy._lock:
-      stale_keys = [
-        session_key
-        for session_key, session in proxy._sessions.items()
-        if session.created < cutoff
-      ]
-      for session_key in stale_keys:
-        session = proxy._sessions[session_key]
-        async with session.lock:
-          session.discard()
-        del proxy._sessions[session_key]
+    await proxy._manager.cleanup(proxy._config.upload_timeout)
 
     assert (None, 1000) not in proxy._sessions
     assert (None, 2000) in proxy._sessions
@@ -784,18 +773,7 @@ class TestStaleSessionCleanup:
     recent = _UploadSession(total_size=3000, storage=storage)
     proxy._sessions[(None, 3000)] = recent
 
-    cutoff = time.monotonic() - proxy._config.upload_timeout
-    async with proxy._lock:
-      stale_keys = [
-        session_key
-        for session_key, session in proxy._sessions.items()
-        if session.created < cutoff
-      ]
-      for session_key in stale_keys:
-        session = proxy._sessions[session_key]
-        async with session.lock:
-          session.discard()
-        del proxy._sessions[session_key]
+    await proxy._manager.cleanup(proxy._config.upload_timeout)
 
     assert (None, 3000) in proxy._sessions
 
