@@ -28,6 +28,8 @@ class BaseUploadSession:
     # check it after acquiring the lock, or a late duplicate chunk would
     # reopen the deleted temp path and archive a second, corrupt file.
     self.finalized = False
+    # Merged, sorted [start, end) byte ranges actually received.
+    self._intervals: list[tuple[int, int]] = []
     self._temp_key = temp_key
     self._path = storage.temp_path(temp_key)
     self._storage = storage
@@ -39,11 +41,36 @@ class BaseUploadSession:
     self._fh.seek(offset)
     self._fh.write(data)
     self._fh.flush()
-    self.bytes_written = max(self.bytes_written, offset + len(data))
+    self._record_bytes(offset, len(data))
+
+  def _record_bytes(self, offset: int, length: int) -> None:
+    '''Track *length* bytes received at *offset*.'''
+    self.bytes_written = max(self.bytes_written, offset + length)
+    if length <= 0:
+      return
+    self._intervals.append((offset, offset + length))
+    self._intervals.sort()
+    merged = [self._intervals[0]]
+    for start, end in self._intervals[1:]:
+      previous_start, previous_end = merged[-1]
+      if start <= previous_end:
+        merged[-1] = (previous_start, max(previous_end, end))
+      else:
+        merged.append((start, end))
+    self._intervals = merged
 
   @property
   def complete(self) -> bool:
-    return self.bytes_written >= self.total_size
+    '''True when every byte of [0, total_size) has arrived.
+
+    A high-water mark is not enough: seek() past EOF zero-fills the
+    gap on disk, so a missing middle chunk would otherwise be archived
+    as valid G-code.
+    '''
+    if not self._intervals:
+      return False
+    first_start, first_end = self._intervals[0]
+    return first_start == 0 and first_end >= self.total_size
 
   def _close(self) -> None:
     if self._fh is not None:

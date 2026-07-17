@@ -60,6 +60,17 @@ class TestCC1UploadSession:
     session.write_chunk(0, b'Y' * 200)
     assert session.bytes_written == 600
 
+  def test_gap_keeps_session_incomplete_until_filled(self, tmp_path):
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    session = CC1UploadSession('test-uuid', 600, storage)
+
+    session.write_chunk(500, b'Z' * 100)
+    assert session.bytes_written == 600  # high-water mark reached total…
+    assert not session.complete  # …but bytes 0-499 never arrived
+
+    session.write_chunk(0, b'Y' * 500)
+    assert session.complete
+
   def test_finalize_saves_and_cleans_temp(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     data = make_gcode(input_filename_base='finalized')

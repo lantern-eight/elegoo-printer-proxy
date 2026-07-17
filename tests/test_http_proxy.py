@@ -90,6 +90,32 @@ class TestUploadSession:
     session.write_chunk(0, b'Y' * 200)
     assert session.bytes_written == 600  # doesn't regress
 
+  def test_gap_keeps_session_incomplete_until_filled(self, tmp_path):
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    session = _UploadSession(total_size=600, storage=storage)
+
+    session.write_chunk(500, b'Z' * 100)
+    assert session.bytes_written == 600  # high-water mark reached total…
+    assert not session.complete  # …but bytes 0-499 never arrived
+
+    session.write_chunk(0, b'Y' * 500)
+    assert session.complete
+
+  def test_gap_with_path_chunks_keeps_session_incomplete(self, tmp_path):
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    session = _UploadSession(total_size=600, storage=storage)
+
+    tail = tmp_path / 'tail.bin'
+    tail.write_bytes(b'Z' * 100)
+    session.write_chunk(500, tail)
+    assert session.bytes_written == 600
+    assert not session.complete
+
+    head = tmp_path / 'head.bin'
+    head.write_bytes(b'Y' * 500)
+    session.write_chunk(0, head)
+    assert session.complete
+
   def test_finalize_saves_and_cleans_temp(self, tmp_path):
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     data = make_gcode(input_filename_base='finalized')

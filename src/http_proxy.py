@@ -123,7 +123,7 @@ class _UploadSession(BaseUploadSession):
           self._fh.write(block)
           written += len(block)
       self._fh.flush()
-      self.bytes_written = max(self.bytes_written, offset + written)
+      self._record_bytes(offset, written)
     else:
       super().write_chunk(offset, data)
 
