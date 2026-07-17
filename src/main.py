@@ -66,7 +66,9 @@ async def _run() -> None:
       except RuntimeError:
         logger.warning(
           'Auto-detect attempt %d/%d failed, retrying in %ds…',
-          attempt, len(delays), delay,
+          attempt,
+          len(delays),
+          delay,
         )
         await asyncio.sleep(delay)
     else:

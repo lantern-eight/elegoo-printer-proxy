@@ -43,7 +43,9 @@ def _parse_non_negative_int(env_var: str, default: str) -> int:
 
 @dataclass(frozen=True)
 class Config:
-  printer_ip: str | None = field(default_factory=lambda: _parse_optional_ip('PRINTER_IP'))
+  printer_ip: str | None = field(
+    default_factory=lambda: _parse_optional_ip('PRINTER_IP')
+  )
   printer_type: str = field(default_factory=_parse_printer_type)
 
   http_port: int = field(
@@ -69,7 +71,9 @@ class Config:
   # Required for CC1 slicer redirection: discovery replies and WS frames
   # advertise this address as MainboardIP so uploads route through the
   # proxy instead of going straight to the printer.
-  advertise_ip: str | None = field(default_factory=lambda: _parse_optional_ip('ADVERTISE_IP'))
+  advertise_ip: str | None = field(
+    default_factory=lambda: _parse_optional_ip('ADVERTISE_IP')
+  )
 
   gcode_dir: str = field(default_factory=lambda: os.getenv('GCODE_DIR', '/data/gcode'))
   retention_days: int = field(

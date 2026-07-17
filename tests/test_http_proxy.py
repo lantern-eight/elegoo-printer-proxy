@@ -118,7 +118,9 @@ class TestUploadSession:
 
 def _make_proxy(tmp_path, **overrides) -> HTTPProxy:
   config = make_config(tmp_path, **overrides)
-  storage = GCodeStorage(str(tmp_path), retention_days=90, store_gcode=config.store_gcode)
+  storage = GCodeStorage(
+    str(tmp_path), retention_days=90, store_gcode=config.store_gcode
+  )
   return HTTPProxy(config, storage)
 
 

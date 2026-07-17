@@ -117,9 +117,7 @@ class ChunkSessionManager:
     cutoff = time.monotonic() - max_age
     async with self._lock:
       stale = [
-        key
-        for key, session in self.sessions.items()
-        if session.created < cutoff
+        key for key, session in self.sessions.items() if session.created < cutoff
       ]
       for key in stale:
         session = self.sessions[key]
