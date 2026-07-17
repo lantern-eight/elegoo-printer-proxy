@@ -24,6 +24,10 @@ class BaseUploadSession:
     self.bytes_written = 0
     self.created = time.monotonic()
     self.lock = asyncio.Lock()
+    # Set under self.lock once finalize() has been attempted; writers must
+    # check it after acquiring the lock, or a late duplicate chunk would
+    # reopen the deleted temp path and archive a second, corrupt file.
+    self.finalized = False
     self._temp_key = temp_key
     self._path = storage.temp_path(temp_key)
     self._storage = storage
@@ -94,9 +98,15 @@ class ChunkSessionManager:
 
     is_complete = False
     try:
+      if session.finalized:
+        logger.warning(
+          'Chunk at offset %d arrived after session finalized, dropping', offset
+        )
+        return
       await asyncio.to_thread(session.write_chunk, offset, data)
       if session.complete:
         is_complete = True
+        session.finalized = True
         try:
           path, _meta = await asyncio.to_thread(
             session.finalize, filename_hint=filename_hint
