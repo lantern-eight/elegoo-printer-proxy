@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import time
 from unittest.mock import AsyncMock, MagicMock
-from zoneinfo import ZoneInfo
 
 import pytest
 from aiohttp import web
@@ -18,7 +17,7 @@ from src.config import Config
 from src.storage import GCodeStorage
 from src.ws_proxy import WSProxy
 from tests.conftest import build_cc1_multipart as _build_multipart
-from tests.conftest import make_gcode, mock_aiohttp_client
+from tests.conftest import make_config, make_gcode, mock_aiohttp_client
 
 # ------------------------------------------------------------------
 # Helpers
@@ -26,29 +25,7 @@ from tests.conftest import make_gcode, mock_aiohttp_client
 
 
 def _make_config(tmp_path, **overrides) -> Config:
-  config = Config.__new__(Config)
-  defaults = {
-    'printer_ip': '192.168.1.100',
-    'printer_type': 'cc1',
-    'http_port': 80,
-    'mqtt_port': 1883,
-    'camera_port': 8080,
-    'mqtt_ws_port': 9001,
-    'ws_port': 3030,
-    'discovery_port': 3000,
-    'advertise_ip': None,
-    'gcode_dir': str(tmp_path),
-    'retention_days': 90,
-    'gcode_timezone': ZoneInfo('UTC'),
-    'upload_timeout': 300,
-    'max_body_size': 256 * 1024 * 1024,
-    'store_gcode': False,
-    'log_level': 'WARNING',
-  }
-  defaults.update(overrides)
-  for key, value in defaults.items():
-    object.__setattr__(config, key, value)
-  return config
+  return make_config(tmp_path, printer_type='cc1', **overrides)
 
 
 # ------------------------------------------------------------------

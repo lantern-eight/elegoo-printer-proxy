@@ -10,15 +10,18 @@ import asyncio
 import io
 import time
 from unittest.mock import AsyncMock, MagicMock
-from zoneinfo import ZoneInfo
 
 import aiohttp
 import pytest
 
-from src.config import Config
 from src.http_proxy import HTTPProxy, _parse_content_range, _UploadSession
 from src.storage import GCodeStorage
-from tests.conftest import build_cc1_multipart, make_gcode, mock_aiohttp_client
+from tests.conftest import (
+  build_cc1_multipart,
+  make_config,
+  make_gcode,
+  mock_aiohttp_client,
+)
 
 # ===================================================================
 # Content-Range parsing
@@ -113,26 +116,9 @@ class TestUploadSession:
 # ===================================================================
 
 
-def _make_proxy(
-  tmp_path, *, store_gcode=False, max_body_size=256 * 1024 * 1024, advertise_ip=None
-) -> HTTPProxy:
-  config = Config.__new__(Config)
-  object.__setattr__(config, 'advertise_ip', advertise_ip)
-  object.__setattr__(config, 'printer_ip', '192.168.1.100')
-  object.__setattr__(config, 'printer_type', 'cc2')
-  object.__setattr__(config, 'http_port', 80)
-  object.__setattr__(config, 'mqtt_port', 1883)
-  object.__setattr__(config, 'camera_port', 8080)
-  object.__setattr__(config, 'mqtt_ws_port', 9001)
-  object.__setattr__(config, 'ws_port', 3030)
-  object.__setattr__(config, 'gcode_dir', str(tmp_path))
-  object.__setattr__(config, 'retention_days', 90)
-  object.__setattr__(config, 'gcode_timezone', ZoneInfo('UTC'))
-  object.__setattr__(config, 'upload_timeout', 300)
-  object.__setattr__(config, 'max_body_size', max_body_size)
-  object.__setattr__(config, 'store_gcode', store_gcode)
-  object.__setattr__(config, 'log_level', 'WARNING')
-  storage = GCodeStorage(str(tmp_path), retention_days=90, store_gcode=store_gcode)
+def _make_proxy(tmp_path, **overrides) -> HTTPProxy:
+  config = make_config(tmp_path, **overrides)
+  storage = GCodeStorage(str(tmp_path), retention_days=90, store_gcode=config.store_gcode)
   return HTTPProxy(config, storage)
 
 
