@@ -151,16 +151,20 @@ class TestConfigValidation:
     assert config.upload_timeout == 0
 
   def test_malformed_printer_ip_raises(self):
-    with pytest.raises(ValueError, match='does not appear to be an IPv4 or IPv6'):
+    with pytest.raises(ValueError, match='PRINTER_IP must be an IPv4 address'):
       _load_config(PRINTER_IP='not-an-ip')
 
   def test_invalid_ipv4_octet_raises(self):
-    with pytest.raises(ValueError, match='does not appear to be an IPv4 or IPv6'):
+    with pytest.raises(ValueError, match='PRINTER_IP must be an IPv4 address'):
       _load_config(PRINTER_IP='192.168.1.999')
 
-  def test_printer_ip_normalized(self):
-    config = _load_config(PRINTER_IP='FE80::1')
-    assert config.printer_ip == 'fe80::1'
+  def test_ipv6_printer_ip_rejected(self):
+    with pytest.raises(ValueError, match='PRINTER_IP must be an IPv4 address'):
+      _load_config(PRINTER_IP='FE80::1')
+
+  def test_ipv6_advertise_ip_rejected(self):
+    with pytest.raises(ValueError, match='ADVERTISE_IP must be an IPv4 address'):
+      _load_config(ADVERTISE_IP='2001:db8::1')
 
   def test_invalid_timezone_raises(self):
     with pytest.raises(ZoneInfoNotFoundError):

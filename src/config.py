@@ -14,10 +14,20 @@ def _parse_timezone() -> ZoneInfo:
 
 
 def _parse_optional_ip(env_var: str) -> str | None:
+  '''Parse an IPv4 address from *env_var*, or None when unset/blank.
+
+  IPv4 only: consumers interpolate this value into URLs, Host headers,
+  and SDCP MainboardIP payloads without IPv6 bracket handling.
+  '''
   raw = os.getenv(env_var)
   if not raw or not raw.strip():
     return None
-  return str(ipaddress.ip_address(raw.strip()))
+  try:
+    return str(ipaddress.IPv4Address(raw.strip()))
+  except ipaddress.AddressValueError:
+    raise ValueError(
+      f'{env_var} must be an IPv4 address, got {raw.strip()!r}'
+    ) from None
 
 
 def _parse_printer_type() -> str:
