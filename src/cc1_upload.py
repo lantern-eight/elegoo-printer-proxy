@@ -12,6 +12,7 @@ final chunk.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -42,7 +43,12 @@ class CC1UploadSession(BaseUploadSession):
     total_size: int,
     storage: GCodeStorage,
   ) -> None:
+    # Distinct UUIDs must yield distinct temp files: sanitizing alone maps
+    # e.g. 'a/b' and 'ab' to the same path, so hash any UUID the filter
+    # would alter (or that is empty/oversized) instead of stripping it.
     safe_uuid = re.sub(r'[^a-zA-Z0-9\-]', '', uuid)
+    if not safe_uuid or safe_uuid != uuid or len(safe_uuid) > 64:
+      safe_uuid = hashlib.sha256(uuid.encode()).hexdigest()[:32]
     super().__init__(total_size, f'cc1_{safe_uuid}', storage)
     self.uuid = uuid
 

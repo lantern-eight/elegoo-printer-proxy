@@ -79,6 +79,17 @@ class TestCC1UploadSession:
     session.discard()
     assert not storage.temp_path('cc1_test-uuid').exists()
 
+  def test_distinct_uuids_get_distinct_temp_paths(self, tmp_path):
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    uuids = ['ab', 'a/b', 'a.b', '...', '!!!', 'x' * 200]
+    paths = {CC1UploadSession(u, 100, storage)._path for u in uuids}
+    assert len(paths) == len(uuids)
+
+  def test_clean_uuid_keeps_readable_temp_path(self, tmp_path):
+    storage = GCodeStorage(str(tmp_path), retention_days=90)
+    session = CC1UploadSession('test-uuid', 100, storage)
+    assert session._path == storage.temp_path('cc1_test-uuid')
+
 
 # ------------------------------------------------------------------
 # Multipart parsing
