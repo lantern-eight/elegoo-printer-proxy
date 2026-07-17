@@ -18,7 +18,7 @@ from src.config import Config
 from src.storage import GCodeStorage
 from src.ws_proxy import WSProxy
 from tests.conftest import build_cc1_multipart as _build_multipart
-from tests.conftest import make_gcode
+from tests.conftest import make_gcode, mock_aiohttp_client
 
 # ------------------------------------------------------------------
 # Helpers
@@ -203,19 +203,6 @@ class TestWSProxyRouting:
 # ------------------------------------------------------------------
 
 
-def _mock_aiohttp_client(status=200, body=b'ok', headers=None):
-  cm = MagicMock()
-  response = MagicMock()
-  response.status = status
-  response.read = AsyncMock(return_value=body)
-  response.headers = headers or {}
-  cm.__aenter__ = AsyncMock(return_value=response)
-  cm.__aexit__ = AsyncMock(return_value=False)
-  client = MagicMock()
-  client.request = MagicMock(return_value=cm)
-  return client
-
-
 class TestPassthroughMainboardIPRewrite:
   @pytest.mark.asyncio
   async def test_response_rewritten_when_advertising(self, tmp_path):
@@ -223,7 +210,7 @@ class TestPassthroughMainboardIPRewrite:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
     printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
-    proxy._client = _mock_aiohttp_client(body=printer_payload)
+    proxy._client = mock_aiohttp_client(body=printer_payload)
 
     request = MagicMock()
     request.method = 'GET'
@@ -245,7 +232,7 @@ class TestPassthroughMainboardIPRewrite:
     storage = GCodeStorage(str(tmp_path), retention_days=90)
     proxy = WSProxy(config, storage)
     printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
-    proxy._client = _mock_aiohttp_client(body=printer_payload)
+    proxy._client = mock_aiohttp_client(body=printer_payload)
 
     request = MagicMock()
     request.method = 'GET'

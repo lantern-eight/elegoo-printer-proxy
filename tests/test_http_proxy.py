@@ -18,7 +18,7 @@ import pytest
 from src.config import Config
 from src.http_proxy import HTTPProxy, _parse_content_range, _UploadSession
 from src.storage import GCodeStorage
-from tests.conftest import build_cc1_multipart, make_gcode
+from tests.conftest import build_cc1_multipart, make_gcode, mock_aiohttp_client
 
 # ===================================================================
 # Content-Range parsing
@@ -656,28 +656,6 @@ class TestHeaderFiltering:
 # ===================================================================
 
 
-def _mock_aiohttp_client(status=200, body=b'ok', headers=None, *, error=None):
-  '''Build a mock aiohttp.ClientSession whose request() returns a context manager.
-
-  When *error* is set, ``__aenter__`` raises that exception instead
-  of returning a response (simulates connection failure).
-  '''
-  cm = MagicMock()
-  if error:
-    cm.__aenter__ = AsyncMock(side_effect=error)
-  else:
-    response = MagicMock()
-    response.status = status
-    response.read = AsyncMock(return_value=body)
-    response.headers = headers or {}
-    cm.__aenter__ = AsyncMock(return_value=response)
-  cm.__aexit__ = AsyncMock(return_value=False)
-
-  client = MagicMock()
-  client.request = MagicMock(return_value=cm)
-  return client
-
-
 class TestForwardStreaming:
   @pytest.mark.asyncio
   async def test_path_body_streams_file_handle(self, tmp_path):
@@ -686,7 +664,7 @@ class TestForwardStreaming:
     data_file = tmp_path / 'upload.bin'
     data_file.write_bytes(b'X' * 1024)
 
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
     await proxy._forward('PUT', '/upload', {'Host': 'x'}, data_file)
 
     _, kwargs = proxy._client.request.call_args
@@ -699,7 +677,7 @@ class TestForwardStreaming:
     data_file = tmp_path / 'upload.bin'
     data_file.write_bytes(b'hello')
 
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
     await proxy._forward('PUT', '/upload', {'Host': 'x'}, data_file)
 
     _, kwargs = proxy._client.request.call_args
@@ -712,7 +690,7 @@ class TestForwardStreaming:
     data_file = tmp_path / 'upload.bin'
     data_file.write_bytes(b'hello')
 
-    proxy._client = _mock_aiohttp_client(error=aiohttp.ClientError())
+    proxy._client = mock_aiohttp_client(error=aiohttp.ClientError())
     status, _, _ = await proxy._forward('PUT', '/upload', {'Host': 'x'}, data_file)
 
     assert status is None
@@ -723,7 +701,7 @@ class TestForwardStreaming:
   async def test_bytes_body_passed_directly(self, tmp_path):
     '''bytes body should be forwarded as-is, no file handle involved.'''
     proxy = _make_proxy(tmp_path)
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
 
     await proxy._forward('GET', '/status', {'Host': 'x'}, b'raw')
 
@@ -734,7 +712,7 @@ class TestForwardStreaming:
   async def test_none_body_passed_directly(self, tmp_path):
     '''None body (e.g. GET with no content) forwards None.'''
     proxy = _make_proxy(tmp_path)
-    proxy._client = _mock_aiohttp_client()
+    proxy._client = mock_aiohttp_client()
 
     await proxy._forward('GET', '/status', {'Host': 'x'}, None)
 
@@ -925,7 +903,7 @@ class TestMainboardIPRewrite:
   async def test_response_rewritten_when_advertising(self, tmp_path):
     proxy = _make_proxy(tmp_path, advertise_ip='192.168.1.200')
     printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
-    proxy._client = _mock_aiohttp_client(
+    proxy._client = mock_aiohttp_client(
       body=printer_payload,
       headers={'Content-Length': str(len(printer_payload))},
     )
@@ -941,7 +919,7 @@ class TestMainboardIPRewrite:
   async def test_response_untouched_without_advertise_ip(self, tmp_path):
     proxy = _make_proxy(tmp_path)
     printer_payload = b'{"Data": {"MainboardIP": "192.168.1.100"}}'
-    proxy._client = _mock_aiohttp_client(
+    proxy._client = mock_aiohttp_client(
       body=printer_payload,
       headers={'Content-Length': str(len(printer_payload))},
     )

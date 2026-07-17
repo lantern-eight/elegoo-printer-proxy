@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -99,6 +100,28 @@ def make_gcode(
 
   all_lines = header_lines + body_lines + tail_lines + config_lines
   return '\n'.join(all_lines).encode('utf-8')
+
+
+def mock_aiohttp_client(status=200, body=b'ok', headers=None, *, error=None):
+  '''Build a mock aiohttp.ClientSession whose request() returns a context manager.
+
+  When *error* is set, ``__aenter__`` raises that exception instead
+  of returning a response (simulates connection failure).
+  '''
+  cm = MagicMock()
+  if error:
+    cm.__aenter__ = AsyncMock(side_effect=error)
+  else:
+    response = MagicMock()
+    response.status = status
+    response.read = AsyncMock(return_value=body)
+    response.headers = headers or {}
+    cm.__aenter__ = AsyncMock(return_value=response)
+  cm.__aexit__ = AsyncMock(return_value=False)
+
+  client = MagicMock()
+  client.request = MagicMock(return_value=cm)
+  return client
 
 
 def build_cc1_multipart(
