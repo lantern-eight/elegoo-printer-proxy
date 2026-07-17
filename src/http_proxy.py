@@ -69,7 +69,7 @@ async def forward_to_printer(
   fwd_headers = {
     k: v
     for k, v in headers.items()
-    if k.lower() not in HOP_BY_HOP and k.lower() != 'host'
+    if (low := k.lower()) not in HOP_BY_HOP and low != 'host'
   }
   if extra_headers:
     fwd_headers.update(extra_headers)
@@ -84,7 +84,7 @@ async def forward_to_printer(
       resp_headers = {
         k: v
         for k, v in response.headers.items()
-        if k.lower() not in HOP_BY_HOP and k.lower() != 'content-length'
+        if (low := k.lower()) not in HOP_BY_HOP and low != 'content-length'
       }
       if config and config.advertise_ip and resp_body and b'MainboardIP' in resp_body:
         resp_body = rewrite_mainboard_ip(
